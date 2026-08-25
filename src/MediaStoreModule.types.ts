@@ -259,7 +259,17 @@ export type ErrorCode =
   | "FILE_UNAVAILABLE"
   | "CURSOR_CLOSED"
   | "CACHE_FAILURE"
-  | "UNKNOWN_ERROR";
+  | "UNKNOWN_ERROR"
+  | "FILE_NOT_FOUND"
+  | "URI_UNAVAILABLE"
+  | "UNSUPPORTED_FORMAT"
+  | "CORRUPTED_FILE"
+  | "EXTRACTION_FAILED"
+  | "METADATA_UNAVAILABLE"
+  | "API_NOT_SUPPORTED"
+  | "MEDIA_REDACTED"
+  | "TIMEOUT"
+  | "CANCELLED";
 
 export interface MediaStoreError {
   code: ErrorCode;
@@ -359,3 +369,34 @@ export interface LibraryQueryResult {
   perTypeStatistics?: LibraryPerTypeStatistics;
   queryTime: number;
 }
+
+export interface MetadataResult {
+  metadata: Record<string, unknown>;
+  status: "complete" | "partial" | "failed" | "cancelled";
+  warnings: string[];
+  errorCode: string | null;
+}
+
+export interface ArtworkUriResult {
+  uri: string | null;
+}
+
+export interface ArtworkBytesResult {
+  uri: string | null;
+  size: number;
+}
+
+export interface MetadataInspectionResult {
+  uri: string;
+  mimeType?: string;
+  sources: {
+    mediaStore: boolean;
+    mediaMetadataRetriever: boolean;
+    exif: boolean;
+  };
+  fields: Record<string, { value: unknown; source: string }>;
+  warnings: string[];
+  status: string;
+}
+
+export type MetadataLevel = "basic" | "standard" | "full" | "raw";

@@ -4,12 +4,13 @@ import android.content.Context
 import android.database.Cursor
 import android.net.Uri
 import android.provider.MediaStore
+import com.obsidian_north.mediastore.metadata.MetadataService
 import com.obsidian_north.mediastore.models.*
-import com.obsidian_north.mediastore.utils.MediaStoreMetadataExtractor
 import com.obsidian_north.mediastore.utils.MimeUtils
 
 class MediaStoreRepository(private val context: Context) {
   private val contentResolver get() = context.contentResolver
+  val metadataService by lazy { MetadataService(contentResolver) }
 
   fun queryAudio(projection: Array<String>?, selection: String?, selectionArgs: Array<String>?, sortOrder: String?): Cursor? =
     contentResolver.query(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, projection, selection, selectionArgs, sortOrder)
@@ -56,61 +57,11 @@ class MediaStoreRepository(private val context: Context) {
   fun queryByUri(uriString: String): Cursor? = contentResolver.query(Uri.parse(uriString), null, null, null, null)
 
   fun getDetailedMetadata(mediaType: String, id: String): Map<String, Any?>? {
-    val tableUri = when (mediaType) {
-      "audio" -> MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
-      "video" -> MediaStore.Video.Media.EXTERNAL_CONTENT_URI
-      "image" -> MediaStore.Images.Media.EXTERNAL_CONTENT_URI
-      "document" -> MediaStore.Files.getContentUri("external")
-      else -> return null
-    }
-    val projection = arrayOf(MediaStore.MediaColumns._ID, MediaStore.MediaColumns.DATA, MediaStore.MediaColumns.MIME_TYPE)
-    val selection = "${MediaStore.MediaColumns._ID} = ?"
-    val cursor = contentResolver.query(tableUri, projection, selection, arrayOf(id), null) ?: return null
-    cursor.use {
-      if (!it.moveToFirst()) return null
-      val filePath = it.getString(it.getColumnIndexOrThrow(MediaStore.MediaColumns.DATA)) ?: return null
-      val mimeType = it.getString(it.getColumnIndexOrThrow(MediaStore.MediaColumns.MIME_TYPE)) ?: ""
-      return MediaStoreMetadataExtractor.extract(mediaType, filePath, mimeType)
-    }
+    return metadataService.extractMetadata(mediaType, id).metadata.ifEmpty { null }
   }
 
   fun getDetailedMetadataByUri(uri: String): Map<String, Any?>? {
-    if (uri.startsWith("content://")) {
-      val projection = arrayOf(MediaStore.MediaColumns.DATA, MediaStore.MediaColumns.MIME_TYPE)
-      val cursor = contentResolver.query(Uri.parse(uri), projection, null, null, null) ?: return null
-      cursor.use {
-        if (!it.moveToFirst()) return null
-        val filePath = it.getString(it.getColumnIndexOrThrow(MediaStore.MediaColumns.DATA)) ?: return null
-        val mimeType = it.getString(it.getColumnIndexOrThrow(MediaStore.MediaColumns.MIME_TYPE)) ?: ""
-        val mediaType = inferMediaType(mimeType, filePath)
-        return MediaStoreMetadataExtractor.extract(mediaType, filePath, mimeType)
-      }
-    } else {
-      val file = java.io.File(uri)
-      if (!file.exists()) return null
-      val mimeType = MimeUtils.getMimeFromExtension(uri.substringAfterLast('.', ""))
-      val mediaType = inferMediaType(mimeType, uri)
-      return MediaStoreMetadataExtractor.extract(mediaType, uri, mimeType)
-    }
-  }
-
-  private fun inferMediaType(mimeType: String, filePath: String): String {
-    return when {
-      mimeType.startsWith("audio/") -> "audio"
-      mimeType.startsWith("video/") -> "video"
-      mimeType.startsWith("image/") -> "image"
-      mimeType.isNotEmpty() && mimeType != "application/octet-stream" -> MimeUtils.getMediaType(mimeType)
-      else -> {
-        val ext = filePath.substringAfterLast('.', "").lowercase()
-        when (ext) {
-          "pdf", "txt", "md", "csv", "doc", "docx", "xls", "xlsx", "ppt", "pptx" -> "document"
-          "jpg", "jpeg", "png", "gif", "webp", "bmp", "heic", "heif", "tiff", "tif" -> "image"
-          "mp3", "wav", "flac", "m4a", "aac", "ogg", "opus" -> "audio"
-          "mp4", "mkv", "mov", "avi", "webm", "m4v" -> "video"
-          else -> "document"
-        }
-      }
-    }
+    return metadataService.extractMetadataByUri(uri).metadata.ifEmpty { null }
   }
 
   fun search(options: SearchOptionsRecord): SearchResultRecord {

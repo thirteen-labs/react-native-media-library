@@ -1,5 +1,49 @@
 # Changelog
 
+## 3.3.1 (2026-08-25)
+
+### Bug Fixes
+
+- **Fix `npm run prepare` build failure**: Added missing `Spec` declarations for `getMetadata`, `getArtworkUri`, `getArtworkBytes`, `inspectMetadata`, `cancelMetadataExtraction`, `cancelAllMetadataExtraction` in `src/MediaStoreModule.ts:31` — `tsc` now passes (`Spec` now mirrors native `MediaStoreModule.kt` and `MediaStoreModule.swift`)
+- **iOS parity**: Implemented deep-metadata bridges in `ios/MediaStoreModule.swift:263` (`getMetadata` with `basic`/`standard`/`full` level filtering, `getArtworkUri`/`getArtworkBytes`, `inspectMetadata`, `cancel*`) so the JS API no longer crashes on iOS
+- **JS resilience**: `src/index.ts:237` now unwraps Android's `MetadataResult` wrapper for `getDetailedMetadata`/`getDetailedMetadataByUri` to support both Android (wrapper) and iOS (plain `DetailedMetadata`)
+- **Type safety**: `src/metadata.types.ts:12` adds `raw` field + index signature to `DetailedMetadata` so `__tests__/metadata.test.ts` passes with strict `tsc`
+
+### Chores
+
+- Bumped `package.json:4` and `android/build.gradle.kts:7` to `3.3.1` (`ios/RNMediaStore.podspec:7` reads from `package.json`)
+
+## 3.3.0 (2026-08-17)
+
+### New Features
+
+- **Metadata subsystem architecture**: Refactored monolithic `MediaStoreMetadataExtractor` into a dedicated `metadata/` package with separate extractors, normalizer, cache, and queue.
+  - `MetadataService` — orchestrator with caching, artwork, and diagnostics
+  - `AudioMetadataExtractor` — `MediaMetadataRetriever` id3 tags (title, artist, album, genre, track, disc, year, composer, albumArtist) + `MediaExtractor` format analysis (codec, bitrate, sampleRate, channels, bitsPerSample)
+  - `VideoMetadataExtractor` — dimensions, rotation, frameRate, captureFrameRate, frameCount, hasAudio, hasVideo, audioTrack info
+  - `ImageMetadataExtractor` + `ExifMetadataExtractor` — full EXIF pipeline with GPS redaction awareness (`location.available` / `location.redacted`)
+  - `MetadataNormalizer` — unified schema across all extraction sources
+  - `MetadataCache` — deep metadata LRU cache with generation-based staleness detection
+  - `MetadataQueue` — bounded concurrent extraction (configurable worker pool) with cancellation support
+  - `MetadataValueUtils` — safe parsers for clean/dirty metadata values (parseIntOrNull, parseDateOrNull, normalizeSampleRate, normalizeBitrate, etc.)
+  - `MetadataReader` — sealed class abstraction over Map/Cursor/MediaFormat
+  - `MetadataErrorCode` — structured error codes (`PERMISSION_DENIED`, `UNSUPPORTED_FORMAT`, `CORRUPTED_FILE`, `MEDIA_REDACTED`, `TIMEOUT`, `CANCELLED`, etc.)
+- **Metadata levels**: `getMetadata(uri, { level })` supports `"basic"`, `"standard"`, `"full"`, and `"raw"` extraction depths
+- **Metadata diagnostics**: `inspectMetadata(uri)` reveals which extraction sources succeeded and per-field provenance
+- **Artwork subsystem**: `getArtworkUri(albumId)` and `getArtworkBytes(albumId)` for structured artwork access
+- **Cancellation API**: `cancelMetadataExtraction(jobId)` and `cancelAllMetadataExtraction()` for stopping unnecessary metadata work
+- **GPS redaction awareness**: Image metadata distinguishes "no GPS exists" from "GPS redacted by Android" (requires `ACCESS_MEDIA_LOCATION`)
+- **Audio identity tags**: Deep metadata now extracts title, artist, album, albumArtist, composer, genre, trackNumber, discNumber, year from embedded id3 tags
+- **Metadata architecture document**: `docs/metadata-architecture.md` — full design specification for the metadata subsystem
+
+### Improvements
+
+- `MediaStoreRepository` now delegates to `MetadataService` instead of the monolithic `MediaStoreMetadataExtractor`
+- `getDetailedMetadata` and `getDetailedMetadataByUri` now return `MetadataResult` with `status`, `warnings`, and `errorCode`
+- TypeScript types updated with `MetadataLevel`, `ExtractionStatus`, `MetadataErrorCode`, `ImageLocation`, `ArtworkMetadata`, `MetadataOptions`, `MetadataInspection`
+- Extended `ErrorCode` union with metadata-specific error codes
+- Updated README with metadata subsystem architecture, new API methods, and complete type documentation
+
 ## 3.2.1 (2026-08-15)
 
 ### Bug Fixes

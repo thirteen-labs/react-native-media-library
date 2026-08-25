@@ -40,10 +40,19 @@ React Native Native Module
  │                                              ▼
  │                                         Cursor → Mapper → Domain Models → JSON
  │
+ │                                         Metadata Subsystem
+ │                                         ├── MetadataService (orchestrator)
+ │                                         ├── MetadataCache (LRU + generation tracking)
+ │                                         ├── MetadataQueue (bounded concurrent extraction)
+ │                                         ├── AudioMetadataExtractor (MediaMetadataRetriever + MediaExtractor)
+ │                                         ├── VideoMetadataExtractor (MediaExtractor + Retriever)
+ │                                         ├── ImageMetadataExtractor (ExifInterface + BitmapFactory)
+ │                                         └── MetadataNormalizer (unified schema)
+ │
  └─── iOS ─────→ Photos Framework (PHAsset) ──→ PHImageManager / PHAssetFetchRequest
-                                                 │
-                                                 ▼
-                                            PHAsset → Domain Models → JSON
+                                                  │
+                                                  ▼
+                                             PHAsset → Domain Models → JSON
 ```
 
 ### Query Flow
@@ -130,10 +139,17 @@ No entire library is loaded into memory. Each row is mapped and collected increm
 - **Fully typed** — complete TypeScript definitions with a strongly typed native module spec (concrete return types, no `any`)
 - **Reactive** — React hook `useMediaChangeEvent` for real-time updates
 - **Batch queries** — `getLibrary()` returns all media types in one native call
- - **Thumbnail/artwork** — helper methods for album art and video/image thumbnails
- - **Comprehensive deep metadata** — `getDetailedMetadata()` / `getDetailedMetadataByUri()` open the file to extract true technical metadata: codec, bitrate, sample rate, channels, color space (audio/video), and full EXIF (aperture, ISO, focal length, GPS, flash, white balance…) for images; best-effort page/word counts for documents
- - **Robust album artwork** — Android extracts embedded album art via `MediaMetadataRetriever` (works on Android 10+ scoped storage); iOS uses the album's representative asset
- - **Folder statistics** — size histograms and per-type breakdowns for folders
+- **Thumbnail/artwork** — helper methods for album art and video/image thumbnails
+- **Comprehensive deep metadata** — `getMetadata()` / `getDetailedMetadata()` / `getDetailedMetadataByUri()` open the file to extract true technical metadata: codec, bitrate, sample rate, channels, color space (audio/video), and full EXIF (aperture, ISO, focal length, GPS, flash, white balance…) for images; best-effort page/word counts for documents
+- **Structured metadata extraction** — dedicated audio/video/image extractors with `MediaMetadataRetriever` id3 tag extraction, `MediaExtractor` format analysis, and `ExifInterface` camera/GPS data
+- **Metadata levels** — `basic` / `standard` / `full` extraction depth control for performance tuning
+- **Metadata caching** — deep metadata LRU cache with generation-based staleness detection
+- **Bounded concurrent extraction** — metadata queue with configurable worker pool and cancellation support
+- **GPS redaction awareness** — distinguishes "no GPS" from "GPS redacted by Android" for privacy-safe handling
+- **Structured metadata errors** — typed `MetadataErrorCode` (`PERMISSION_DENIED`, `UNSUPPORTED_FORMAT`, `CORRUPTED_FILE`, `MEDIA_REDACTED`, etc.)
+- **Metadata diagnostics** — `inspectMetadata()` reveals which extraction sources succeeded and per-field provenance
+- **Robust album artwork** — Android extracts embedded album art via `MediaMetadataRetriever` (works on Android 10+ scoped storage); iOS uses the album's representative asset
+- **Folder statistics** — size histograms and per-type breakdowns for folders
 - **Incremental indexing** — delta-only refresh tracking added, modified, and removed items
 - **Plugin hooks** — extensible metadata system via JS-side plugin registration
 - **Improved batch queries** — per-type pagination, selective type fetching, and query timing
@@ -333,17 +349,40 @@ function MediaWatcher() {
 
 | Function | Returns | Description |
 |----------|---------|-------------|
-| `getDetailedMetadata(mediaType, id)` | `DetailedMetadata \| null` | Deep metadata for a media item by type + database ID |
-| `getDetailedMetadataByUri(uri)` | `DetailedMetadata \| null` | Deep metadata for a media item by content URI or file path |
+| `getMetadata(uri, options?)` | `MetadataResult` | Deep metadata with level control (`basic`/`standard`/`full`) |
+| `getDetailedMetadata(mediaType, id)` | `MetadataResult` | Deep metadata for a media item by type + database ID |
+| `getDetailedMetadataByUri(uri)` | `MetadataResult` | Deep metadata for a media item by content URI or file path |
+| `inspectMetadata(uri)` | `MetadataInspectionResult` | Diagnostics: sources used, per-field provenance, warnings |
 
 ```typescript
-import { getDetailedMetadata } from "@obsidian_north/react-native-mediastore";
+import { getMetadata, getDetailedMetadata } from "@obsidian_north/react-native-mediastore";
 
-const meta = await getDetailedMetadata("video", videoId);
-console.log(meta?.video?.codec);        // "h264"
-console.log(meta?.video?.width);        // 1920
-console.log(meta?.audio?.sampleRate);   // 48000 (audio track)
-console.log(meta?.image?.exif?.iso);    // 400 (for images)
+// Fast basic metadata (no file I/O for indexed fields)
+const basic = await getMetadata(uri, { level: "basic" });
+
+// Full deep extraction
+const meta = await getMetadata(uri, { level: "full" });
+console.log(meta.metadata?.audio?.codec);        // "flac"
+console.log(meta.metadata?.audio?.sampleRate);   // 96000
+console.log(meta.metadata?.audio?.bitsPerSample); // 24
+console.log(meta.metadata?.image?.exif?.iso);    // 400
+
+// Inspect which sources contributed data
+const inspection = await inspectMetadata(uri);
+console.log(inspection.sources.mediaStore);           // true
+console.log(inspection.sources.mediaMetadataRetriever); // true
+console.log(inspection.fields.sampleRate.source);    // "retriever"
+```
+
+The `MetadataResult` returned by all metadata methods includes:
+
+```typescript
+{
+  metadata: DetailedMetadata;   // The extracted metadata
+  status: "complete" | "partial" | "failed" | "cancelled";
+  warnings: string[];           // Non-fatal extraction warnings
+  errorCode: MetadataErrorCode | null;  // Structured error if failed
+}
 ```
 
 Bulk queries (`getAudio`, `getVideos`, …) are also enriched with **cheap catalog columns** (read from the media index, no file I/O). New optional fields:
@@ -366,31 +405,43 @@ interface DetailedMetadata {
   video?: VideoFormatMetadata;
   image?: ImageFormatMetadata;
   document?: DocumentFormatMetadata;
-  raw?: Record<string, unknown>;
+  artwork?: { available: boolean; uri?: string };
 }
 
 interface AudioFormatMetadata {
+  // Technical
   codec?: string; codecMime?: string; codecProfile?: string;
   bitrate?: number; sampleRate?: number; channels?: number;
   channelLayout?: string; bitsPerSample?: number; durationMs?: number; language?: string;
+  // Identity (from MediaMetadataRetriever)
+  title?: string; artist?: string; album?: string; albumArtist?: string;
+  composer?: string; genre?: string; author?: string; writer?: string;
+  trackNumber?: number; totalTracks?: number; discNumber?: number;
+  totalDiscs?: number; year?: number;
 }
 
 interface VideoFormatMetadata {
   codec?: string; codecMime?: string; profile?: string; level?: string;
   bitrate?: number; width?: number; height?: number; frameRate?: number;
-  rotation?: number; colorSpace?: string; colorStandard?: string;
-  colorTransfer?: string; hasBFrames?: boolean; durationMs?: number; language?: string;
+  rotation?: number; captureFrameRate?: number; frameCount?: number;
+  colorSpace?: string; colorStandard?: string;
+  colorTransfer?: string; colorRange?: string;
+  hasBFrames?: boolean; durationMs?: number; language?: string;
+  audioTrack?: { codecMime?: string; channels?: number; sampleRate?: number };
 }
 
 interface ImageFormatMetadata {
   format?: string; width?: number; height?: number;
   bitsPerSample?: number; colorSpace?: string; exif?: ExifMetadata;
+  location?: { latitude: number | null; longitude: number | null;
+    available: boolean; redacted: boolean };
 }
 
 interface ExifMetadata {
   make?: string; model?: string; software?: string; lensMake?: string; lensModel?: string;
   imageDescription?: string; artist?: string; copyright?: string;
-  dateTimeOriginal?: number; dateTimeDigitized?: number; orientation?: number;
+  dateTimeOriginal?: number; dateTimeDigitized?: number; dateTime?: number;
+  orientation?: number;
   aperture?: number; iso?: number; shutterSpeed?: number; exposureTime?: number;
   exposureProgram?: string; exposureBias?: number; meteringMode?: string;
   flash?: boolean; flashMode?: string; whiteBalance?: string;
@@ -408,6 +459,28 @@ interface DocumentFormatMetadata {
   keywords?: string[]; language?: string; isEncrypted?: boolean;
   creationDate?: number; modificationDate?: number;
 }
+
+type MetadataLevel = "basic" | "standard" | "full" | "raw";
+type ExtractionStatus = "complete" | "partial" | "failed" | "cancelled";
+type MetadataErrorCode = "PERMISSION_DENIED" | "FILE_NOT_FOUND" | "URI_UNAVAILABLE"
+  | "UNSUPPORTED_FORMAT" | "CORRUPTED_FILE" | "EXTRACTION_FAILED"
+  | "METADATA_UNAVAILABLE" | "API_NOT_SUPPORTED" | "MEDIA_REDACTED"
+  | "TIMEOUT" | "CANCELLED" | "UNKNOWN_ERROR";
+
+interface MetadataResult {
+  metadata: DetailedMetadata;
+  status: ExtractionStatus;
+  warnings: string[];
+  errorCode: MetadataErrorCode | null;
+}
+
+interface MetadataInspectionResult {
+  uri: string;
+  sources: { mediaStore: boolean; mediaMetadataRetriever: boolean; exif: boolean };
+  fields: Record<string, { value: unknown; source: string }>;
+  warnings: string[];
+  status: ExtractionStatus;
+}
 ```
 
 ### Artwork & Thumbnails
@@ -415,6 +488,8 @@ interface DocumentFormatMetadata {
 | Function | Returns | Description |
 |----------|---------|-------------|
 | `getAlbumArtwork(albumId)` | `string \| null` | Album art content URI |
+| `getArtworkUri(albumId)` | `ArtworkUriResult` | Album artwork content URI via metadata service |
+| `getArtworkBytes(albumId)` | `ArtworkBytesResult` | Album artwork as cached file with size |
 | `getVideoThumbnail(videoId, width?, height?)` | `string \| null` | Video thumbnail URI |
 | `getImageThumbnail(imageId, width?, height?)` | `string \| null` | Image thumbnail URI |
 
@@ -426,6 +501,8 @@ interface DocumentFormatMetadata {
 | `checkPermissions()` | `PermissionStatus` | Check current permission state |
 | `requestPermissions()` | `PermissionStatus` | Request media permissions |
 | `useMediaChangeEvent(callback?)` | `MediaChangeEvent \| null` | React hook for change events |
+| `cancelMetadataExtraction(jobId)` | `boolean` | Cancel a queued/running metadata extraction job |
+| `cancelAllMetadataExtraction()` | `boolean` | Cancel all pending metadata extraction jobs |
 
 ---
 
@@ -444,6 +521,16 @@ Every thrown error has a structured `MediaStoreError` with a typed `code`:
 | `FILE_UNAVAILABLE` | File not found or inaccessible |
 | `CURSOR_CLOSED` | Cursor was closed before iteration completed |
 | `CACHE_FAILURE` | Cache operation failed |
+| `FILE_NOT_FOUND` | File does not exist at the given path |
+| `URI_UNAVAILABLE` | Content URI could not be queried |
+| `UNSUPPORTED_FORMAT` | Media format not supported for deep extraction |
+| `CORRUPTED_FILE` | File is corrupted or unreadable |
+| `EXTRACTION_FAILED` | Metadata extraction failed (generic) |
+| `METADATA_UNAVAILABLE` | Requested metadata not available for this file |
+| `API_NOT_SUPPORTED` | Required API not available on this Android version |
+| `MEDIA_REDACTED` | Metadata redacted by Android (e.g. GPS requires ACCESS_MEDIA_LOCATION) |
+| `TIMEOUT` | Metadata extraction timed out |
+| `CANCELLED` | Metadata extraction was cancelled |
 | `UNKNOWN_ERROR` | Unexpected error |
 
 ```typescript
@@ -1025,7 +1112,11 @@ type ErrorCode =
   | "PERMISSION_DENIED" | "QUERY_FAILED" | "INVALID_ARGUMENTS"
   | "INVALID_SORT_FIELD" | "INVALID_MIME_TYPE"
   | "UNSUPPORTED_ANDROID_VERSION" | "FILE_UNAVAILABLE"
-  | "CURSOR_CLOSED" | "CACHE_FAILURE" | "UNKNOWN_ERROR";
+  | "CURSOR_CLOSED" | "CACHE_FAILURE"
+  | "FILE_NOT_FOUND" | "URI_UNAVAILABLE" | "UNSUPPORTED_FORMAT"
+  | "CORRUPTED_FILE" | "EXTRACTION_FAILED" | "METADATA_UNAVAILABLE"
+  | "API_NOT_SUPPORTED" | "MEDIA_REDACTED" | "TIMEOUT" | "CANCELLED"
+  | "UNKNOWN_ERROR";
 interface MediaStoreError { code: ErrorCode; message: string; details?: string; }
 ```
 
@@ -1212,14 +1303,38 @@ react-native-mediastore/
  │       ├── MediaStoreObserver.kt
  │       ├── MediaStorePermissions.kt
  │       ├── MediaStoreCache.kt
-  │       ├── models/
-  │       │   ├── Options.kt
-  │       │   ├── MediaRecords.kt
-  │       │   ├── CollectionRecords.kt
-  │       │   ├── FolderRecords.kt
-  │       │   └── ResultRecords.kt
-  │       ├── utils/
+ │       ├── metadata/
+ │       │   ├── MetadataService.kt
+ │       │   ├── MetadataNormalizer.kt
+ │       │   ├── MetadataCache.kt
+ │       │   ├── MetadataQueue.kt
+ │       │   ├── common/
+ │       │   │   ├── MetadataValueUtils.kt
+ │       │   │   ├── MetadataReader.kt
+ │       │   │   └── MetadataErrorCode.kt
+ │       │   ├── audio/
+ │       │   │   └── AudioMetadataExtractor.kt
+ │       │   ├── video/
+ │       │   │   └── VideoMetadataExtractor.kt
+ │       │   └── image/
+ │       │       ├── ImageMetadataExtractor.kt
+ │       │       └── ExifMetadataExtractor.kt
+ │       ├── models/
+ │       │   ├── Options.kt
+ │       │   ├── MediaRecords.kt
+ │       │   ├── CollectionRecords.kt
+ │       │   ├── FolderRecords.kt
+ │       │   └── ResultRecords.kt
+ │       ├── utils/
+ │       │   ├── CursorUtils.kt
+ │       │   ├── MimeUtils.kt
+ │       │   ├── DurationUtils.kt
+ │       │   ├── ArtworkUtils.kt
+ │       │   └── MediaStoreMetadataExtractor.kt
  │       └── extensions/
+ │           ├── CursorExtensions.kt
+ │           ├── ContentResolverExtensions.kt
+ │           └── UriExtensions.kt
  ├── ios/
  │   ├── RNMediaStore.podspec
  │   ├── MediaStoreModule.swift
@@ -1229,7 +1344,10 @@ react-native-mediastore/
  ├── src/
  │   ├── index.ts
  │   ├── MediaStoreModule.ts
- │   └── MediaStoreModule.types.ts
+ │   ├── MediaStoreModule.types.ts
+ │   └── metadata.types.ts
+ ├── docs/
+ │   └── metadata-architecture.md
  ├── build/
  ├── __tests__/
  │   └── types.test.ts
@@ -1268,7 +1386,7 @@ react-native-mediastore/
   ✓ Plugin hooks for custom metadata
   ✓ Batch library query improvements
 
-3.2 (Current)
+3.2
   ✓ Migrated from Expo Module to pure React Native native module
   ✓ No dependency on expo-modules-core
   ✓ Compatible with RN CLI, Expo prebuild, and EAS Build
@@ -1276,10 +1394,36 @@ react-native-mediastore/
   ✓ Zero Expo references in native code
   ✓ Android model layer rebuilt for RN bridge pattern
   ✓ Cleaner public API — no unnecessary type casts
-  ✓ Comprehensive deep metadata (`getDetailedMetadata` / `getDetailedMetadataByUri`) — codec, bitrate, sample rate, channels, color space (audio/video) + full EXIF (images)
-  ✓ Rich catalog columns on bulk queries (writer, isMusic/isPodcast/isRingtone…, bucket, colorStandard/colorTransfer, document title)
-  ✓ Robust album artwork — embedded picture extraction on Android 10+ (scoped storage)
-  ☐ AI semantic search
+  ✓ Comprehensive deep metadata (getDetailedMetadata / getDetailedMetadataByUri)
+  ✓ Rich catalog columns on bulk queries
+  ✓ Robust album artwork — embedded picture extraction on Android 10+
+
+3.3 (2026-08-17)
+   ✓ Metadata subsystem architecture — dedicated metadata/ package with audio/video/image extractors
+   ✓ AudioMetadataExtractor — MediaMetadataRetriever id3 tags + MediaExtractor format analysis
+   ✓ VideoMetadataExtractor — dimensions, rotation, frameRate, captureFrameRate, hasAudio/hasVideo
+   ✓ ImageMetadataExtractor + ExifMetadataExtractor — full EXIF pipeline with GPS redaction awareness
+   ✓ MetadataNormalizer — unified schema across all extraction sources
+   ✓ MetadataCache — deep metadata LRU cache with generation-based staleness detection
+   ✓ MetadataQueue — bounded concurrent extraction with cancellation support
+   ✓ MetadataValueUtils — safe parsers for clean/dirty metadata values
+   ✓ MetadataReader abstraction — sealed class over Map/Cursor/MediaFormat
+   ✓ MetadataErrorCode — structured error codes for metadata operations
+   ✓ getMetadata(uri, { level }) — metadata level control (basic/standard/full)
+   ✓ inspectMetadata(uri) — diagnostics with per-field provenance
+   ✓ getArtworkUri / getArtworkBytes — artwork subsystem
+   ✓ Cancellation API — cancelMetadataExtraction / cancelAllMetadataExtraction
+   ✓ GPS location redaction awareness (ACCESS_MEDIA_LOCATION)
+   ✓ Audio identity tags in deep metadata (title, artist, album, genre, track, disc, year)
+   ✓ Metadata architecture document (docs/metadata-architecture.md)
+
+3.3.1 (Current — patch)
+   ✓ Fix `npm run prepare` — add missing `Spec` methods (`getMetadata`, `getArtworkUri`, `getArtworkBytes`, `inspectMetadata`, `cancelMetadataExtraction`, `cancelAllMetadataExtraction`) so `tsc --project tsconfig.json` passes
+   ✓ iOS bridges for deep metadata / artwork / diagnostics (`MediaStoreModule.swift:263`)
+   ✓ JS unwrap for `getDetailedMetadata` to handle Android wrapper vs iOS plain object (`index.ts:237`)
+   ✓ `DetailedMetadata.raw` + index signature for strict type tests (`metadata.types.ts:12`)
+   ✓ Version bump `package.json:4` + `android/build.gradle.kts:7` → `3.3.1` (`iOS` reads from `package.json`)
+   ☐ AI semantic search
   ☐ Smart albums / auto-playlists
   ☐ EXIF utilities (editing GPS, date)
   ☐ Waveform extraction (audio)

@@ -21,8 +21,12 @@ import type {
   PermissionStatus,
   LibraryResult,
   IncrementalChanges,
+  MetadataResult,
+  ArtworkUriResult,
+  ArtworkBytesResult,
+  MetadataInspectionResult,
 } from "./MediaStoreModule.types";
-import type { DetailedMetadata, MediaMetaType } from "./metadata.types";
+import type { DetailedMetadata, MetadataOptions } from "./metadata.types";
 
 export interface Spec extends TurboModule {
   getAudio(sort: SortOptions | null, filter: FilterOptions | null, pagination: PaginationOptions | null): Promise<AudioItem[]>;
@@ -54,6 +58,13 @@ export interface Spec extends TurboModule {
   getLibrary(sort: SortOptions | null, filter: FilterOptions | null, pagination: PaginationOptions | null): Promise<LibraryResult>;
   getDetailedMetadata(mediaType: string, id: string): Promise<DetailedMetadata | null>;
   getDetailedMetadataByUri(uri: string): Promise<DetailedMetadata | null>;
+  // --- Deep metadata / artwork / diagnostics ---
+  getMetadata(uri: string, options: MetadataOptions | null): Promise<MetadataResult>;
+  getArtworkUri(albumId: string): Promise<ArtworkUriResult>;
+  getArtworkBytes(albumId: string): Promise<ArtworkBytesResult>;
+  inspectMetadata(uri: string): Promise<MetadataInspectionResult>;
+  cancelMetadataExtraction(jobId: string): Promise<boolean>;
+  cancelAllMetadataExtraction(): Promise<boolean>;
   addListener(eventName: string): void;
   removeListeners(count: number): void;
 }

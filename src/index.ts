@@ -39,7 +39,23 @@ import type {
   ImageFormatMetadata,
   ExifMetadata,
   DocumentFormatMetadata,
+  MetadataLevel,
+  ExtractionStatus,
+  MetadataErrorCode,
+  MetadataExtractionResult,
+  MetadataSource,
+  MetadataField,
+  MetadataInspection,
+  MetadataOptions,
+  ArtworkMetadata,
+  ImageLocation,
 } from "./metadata.types";
+import type {
+  MetadataResult,
+  ArtworkUriResult,
+  ArtworkBytesResult,
+  MetadataInspectionResult,
+} from "./MediaStoreModule.types";
 
 export type {
   AudioItem,
@@ -80,6 +96,20 @@ export type {
   ImageFormatMetadata,
   ExifMetadata,
   DocumentFormatMetadata,
+  MetadataLevel,
+  ExtractionStatus,
+  MetadataErrorCode,
+  MetadataExtractionResult,
+  MetadataSource,
+  MetadataField,
+  MetadataInspection,
+  MetadataOptions,
+  ArtworkMetadata,
+  ImageLocation,
+  MetadataResult,
+  ArtworkUriResult,
+  ArtworkBytesResult,
+  MetadataInspectionResult,
 };
 
 export { SortOrder, SortField } from "./MediaStoreModule.types";
@@ -208,13 +238,57 @@ export async function getDetailedMetadata(
   mediaType: MediaMetaType,
   id: string
 ): Promise<DetailedMetadata | null> {
-  return NativeModule.getDetailedMetadata(mediaType, id);
+  const result: unknown = await NativeModule.getDetailedMetadata(mediaType, id);
+  return unwrapDetailedMetadata(result);
 }
 
 export async function getDetailedMetadataByUri(
   uri: string
 ): Promise<DetailedMetadata | null> {
-  return NativeModule.getDetailedMetadataByUri(uri);
+  const result: unknown = await NativeModule.getDetailedMetadataByUri(uri);
+  return unwrapDetailedMetadata(result);
+}
+
+function unwrapDetailedMetadata(value: unknown): DetailedMetadata | null {
+  if (value == null) return null;
+  if (typeof value === "object" && value !== null && "metadata" in (value as Record<string, unknown>)) {
+    const wrapper = value as { metadata?: unknown };
+    return (wrapper.metadata as DetailedMetadata) ?? null;
+  }
+  return value as DetailedMetadata;
+}
+
+export async function getMetadata(
+  uri: string,
+  options?: MetadataOptions
+): Promise<MetadataResult> {
+  return NativeModule.getMetadata(uri, options ?? null);
+}
+
+export async function getArtworkUri(
+  albumId: string
+): Promise<ArtworkUriResult> {
+  return NativeModule.getArtworkUri(albumId);
+}
+
+export async function getArtworkBytes(
+  albumId: string
+): Promise<ArtworkBytesResult> {
+  return NativeModule.getArtworkBytes(albumId);
+}
+
+export async function inspectMetadata(
+  uri: string
+): Promise<MetadataInspectionResult> {
+  return NativeModule.inspectMetadata(uri);
+}
+
+export async function cancelMetadataExtraction(jobId: string): Promise<boolean> {
+  return NativeModule.cancelMetadataExtraction(jobId);
+}
+
+export async function cancelAllMetadataExtraction(): Promise<boolean> {
+  return NativeModule.cancelAllMetadataExtraction();
 }
 
 export async function getRecent(

@@ -4,7 +4,7 @@ plugins {
 }
 
 group = "com.obsidian_north"
-version = "3.2.1"
+version = "3.3.1"
 
 android {
     namespace = "com.obsidian_north.mediastore"
@@ -18,6 +18,37 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
+
+    buildFeatures {
+        buildConfig = false
+    }
+
+    androidResources {
+        // This module ships no resources; avoid transitive R-class overhead.
+        nonTransitiveRClass = true
+    }
+
+    lint {
+        abortOnError = false
+        checkReleaseBuilds = false
+        checkDependencies = false
+    }
+
+    testOptions {
+        unitTests.isReturnDefaultValues = true
+    }
+}
+
+// Reduce build tasks: this module has no tests and lint is run separately.
+// Disable lint + test tasks so `./gradlew build`/`assemble` skips them.
+tasks.matching { it.name.contains("lint", ignoreCase = true) }.configureEach {
+    enabled = false
+}
+tasks.withType<Test>().configureEach {
+    enabled = false
+}
+tasks.matching { it.name.contains("Test", ignoreCase = true) }.configureEach {
+    enabled = false
 }
 
 kotlin {

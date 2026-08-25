@@ -278,12 +278,91 @@ class MediaStoreModule(reactContext: ReactApplicationContext) : ReactContextBase
 
   @ReactMethod
   fun getDetailedMetadata(mediaType: String, id: String, promise: Promise) {
-    coroutineMethod({ repository.getDetailedMetadata(mediaType, id) }, promise)
+    coroutineMethod({
+      val result = repository.metadataService.extractMetadata(mediaType, id)
+      mapOf(
+        "metadata" to result.metadata,
+        "status" to result.status.jsValue,
+        "warnings" to result.warnings,
+        "errorCode" to (result.errorCode?.jsCode),
+      )
+    }, promise)
   }
 
   @ReactMethod
   fun getDetailedMetadataByUri(uri: String, promise: Promise) {
-    coroutineMethod({ repository.getDetailedMetadataByUri(uri) }, promise)
+    coroutineMethod({
+      val result = repository.metadataService.extractMetadataByUri(uri)
+      mapOf(
+        "metadata" to result.metadata,
+        "status" to result.status.jsValue,
+        "warnings" to result.warnings,
+        "errorCode" to (result.errorCode?.jsCode),
+      )
+    }, promise)
+  }
+
+  @ReactMethod
+  fun getMetadata(uri: String, options: ReadableMap?, promise: Promise) {
+    coroutineMethod({
+      val level = options?.getString("level") ?: "full"
+      val result = repository.metadataService.extractMetadataByUri(uri)
+      val metadata = result.metadata
+
+      val filtered = when (level) {
+        "basic" -> filterMetadataBasic(metadata)
+        "standard" -> filterMetadataStandard(metadata)
+        else -> metadata
+      }
+
+      mapOf(
+        "metadata" to filtered,
+        "status" to result.status.jsValue,
+        "warnings" to result.warnings,
+        "errorCode" to (result.errorCode?.jsCode),
+      )
+    }, promise)
+  }
+
+  @ReactMethod
+  fun getArtworkUri(albumId: String, promise: Promise) {
+    coroutineMethod({
+      val uri = repository.metadataService.getArtworkUri(albumId)
+      mapOf("uri" to uri?.toString())
+    }, promise)
+  }
+
+  @ReactMethod
+  fun getArtworkBytes(albumId: String, promise: Promise) {
+    coroutineMethod({
+      val bytes = repository.metadataService.getArtworkBytes(albumId)
+      if (bytes != null) {
+        val artworkDir = File(context.cacheDir, "mediastore_artwork")
+        artworkDir.mkdirs()
+        val artworkFile = File(artworkDir, "album_$albumId.jpg")
+        artworkFile.writeBytes(bytes)
+        mapOf("uri" to artworkFile.toURI().toString(), "size" to bytes.size)
+      } else {
+        mapOf("uri" to null, "size" to 0)
+      }
+    }, promise)
+  }
+
+  @ReactMethod
+  fun inspectMetadata(uri: String, promise: Promise) {
+    coroutineMethod({ repository.metadataService.inspectMetadata(uri) }, promise)
+  }
+
+  @ReactMethod
+  fun cancelMetadataExtraction(jobId: String, promise: Promise) {
+    repository.metadataService.getQueue()?.cancel(jobId)
+    promise.resolve(true)
+  }
+
+  @ReactMethod
+  fun cancelAllMetadataExtraction(promise: Promise) {
+    repository.metadataService.getQueue()?.cancelAll()
+    promise.resolve(true)
   }
 
   @ReactMethod
@@ -345,6 +424,7 @@ class MediaStoreModule(reactContext: ReactApplicationContext) : ReactContextBase
   @ReactMethod
   fun refresh(promise: Promise) {
     cache.invalidate()
+    repository.metadataService.getCache().invalidateAll()
     promise.resolve(null)
   }
 
@@ -404,6 +484,49 @@ class MediaStoreModule(reactContext: ReactApplicationContext) : ReactContextBase
   }
 
   // --- Internal Methods ---
+
+  private fun filterMetadataBasic(metadata: Map<String, Any?>): Map<String, Any?> {
+    return mapOf(
+      "mediaType" to metadata["mediaType"],
+      "mimeType" to metadata["mimeType"],
+      "fileSize" to metadata["fileSize"],
+      "durationMs" to metadata["durationMs"],
+      "containerFormat" to metadata["containerFormat"],
+    )
+  }
+
+  private fun filterMetadataStandard(metadata: Map<String, Any?>): Map<String, Any?> {
+    val result = mutableMapOf<String, Any?>()
+    for (key in listOf("mediaType", "mimeType", "fileSize", "durationMs", "containerFormat")) {
+      metadata[key]?.let { result[key] = it }
+    }
+    val audio = metadata["audio"] as? Map<*, *>
+    if (audio != null) {
+      val standardAudio = mutableMapOf<String, Any?>()
+      for (key in listOf("title", "artist", "album", "albumArtist", "genre", "trackNumber", "discNumber", "year")) {
+        audio[key]?.let { standardAudio[key] = it }
+      }
+      if (standardAudio.isNotEmpty()) result["audio"] = standardAudio
+    }
+    val video = metadata["video"] as? Map<*, *>
+    if (video != null) {
+      val standardVideo = mutableMapOf<String, Any?>()
+      for (key in listOf("width", "height", "rotation", "codec")) {
+        video[key]?.let { standardVideo[key] = it }
+      }
+      if (standardVideo.isNotEmpty()) result["video"] = standardVideo
+    }
+    val image = metadata["image"] as? Map<*, *>
+    if (image != null) {
+      val standardImage = mutableMapOf<String, Any?>()
+      for (key in listOf("width", "height", "format")) {
+        image[key]?.let { standardImage[key] = it }
+      }
+      if (standardImage.isNotEmpty()) result["image"] = standardImage
+    }
+    metadata["artwork"]?.let { result["artwork"] = it }
+    return result
+  }
 
   private suspend fun generateThumbnail(mediaId: String, mediaType: String, width: Int?, height: Int?): String? {
     return withContext(Dispatchers.IO) {

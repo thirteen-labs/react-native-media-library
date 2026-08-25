@@ -260,6 +260,129 @@ class MediaStoreModule: RCTEventEmitter {
     resolve(repository.getThumbnail(assetId: imageId, mediaType: .photo, width: width, height: height))
   }
 
+  // MARK: - Deep Metadata
+
+  @objc
+  func getMetadata(_ uri: String, options: NSDictionary?,
+                 resolver resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
+    let repository = MediaStoreRepository()
+    let level = (options?["level"] as? String) ?? "full"
+    guard let detailed = repository.getDetailedMetadataByUri(uri: uri) else {
+      resolve([
+        "metadata": [:] as [String: Any],
+        "status": "failed",
+        "warnings": ["File not found or unsupported"],
+        "errorCode": "FILE_NOT_FOUND"
+      ] as [String: Any])
+      return
+    }
+    // Basic / standard level filtering mirrors Android's filterMetadata* logic
+    var filtered = detailed
+    if level == "basic" {
+      let allowed: Set<String> = ["mediaType", "mimeType", "fileSize", "durationMs", "containerFormat"]
+      filtered = filtered.filter { allowed.contains($0.key) }
+    } else if level == "standard" {
+      // Keep only top-level basics + limited sub-keys
+      var out: [String: Any?] = [:]
+      for key in ["mediaType", "mimeType", "fileSize", "durationMs", "containerFormat"] {
+        if let v = detailed[key] { out[key] = v }
+      }
+      if let audio = detailed["audio"] as? [String: Any?] {
+        let keep = ["title", "artist", "album", "albumArtist", "genre", "trackNumber", "discNumber", "year"]
+        var sa: [String: Any?] = [:]
+        for k in keep { if let v = audio[k] { sa[k] = v } }
+        if !sa.isEmpty { out["audio"] = sa }
+      }
+      if let video = detailed["video"] as? [String: Any?] {
+        let keep = ["width", "height", "rotation", "codec"]
+        var sv: [String: Any?] = [:]
+        for k in keep { if let v = video[k] { sv[k] = v } }
+        if !sv.isEmpty { out["video"] = sv }
+      }
+      if let image = detailed["image"] as? [String: Any?] {
+        let keep = ["width", "height", "format"]
+        var si: [String: Any?] = [:]
+        for k in keep { if let v = image[k] { si[k] = v } }
+        if !si.isEmpty { out["image"] = si }
+      }
+      if let artwork = detailed["artwork"] { out["artwork"] = artwork }
+      filtered = out
+    }
+    resolve([
+      "metadata": filtered,
+      "status": "complete",
+      "warnings": [] as [String],
+      "errorCode": NSNull()
+    ] as [String: Any])
+  }
+
+  @objc
+  func getArtworkUri(_ albumId: String,
+                   resolver resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
+    let repository = MediaStoreRepository()
+    let uri = repository.getAlbumArtwork(albumId: albumId)
+    resolve(["uri": uri as Any] as [String: Any])
+  }
+
+  @objc
+  func getArtworkBytes(_ albumId: String,
+                     resolver resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
+    let repository = MediaStoreRepository()
+    guard let uriString = repository.getAlbumArtwork(albumId: albumId),
+          let url = URL(string: uriString),
+          let data = try? Data(contentsOf: url) else {
+      resolve(["uri": NSNull(), "size": 0] as [String: Any])
+      return
+    }
+    resolve(["uri": uriString, "size": data.count] as [String: Any])
+  }
+
+  @objc
+  func inspectMetadata(_ uri: String,
+                     resolver resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
+    let repository = MediaStoreRepository()
+    guard let detailed = repository.getDetailedMetadataByUri(uri: uri) else {
+      resolve([
+        "uri": uri,
+        "sources": ["mediaStore": false, "mediaMetadataRetriever": false, "exif": false],
+        "fields": [:] as [String: Any],
+        "warnings": ["File not found"],
+        "status": "failed"
+      ] as [String: Any])
+      return
+    }
+    var fields: [String: Any] = [:]
+    for (key, value) in detailed {
+      if let sub = value as? [String: Any?] {
+        for (subKey, subValue) in sub {
+          fields["\(key).\(subKey)"] = ["value": subValue as Any, "source": "extractor"]
+        }
+      } else {
+        fields[key] = ["value": value as Any, "source": "mediastore"]
+      }
+    }
+    let hasExif = (detailed["image"] as? [String: Any?])?["exif"] != nil
+    resolve([
+      "uri": uri,
+      "mimeType": detailed["mimeType"] as Any,
+      "sources": ["mediaStore": true, "mediaMetadataRetriever": true, "exif": hasExif],
+      "fields": fields,
+      "warnings": [] as [String],
+      "status": "complete"
+    ] as [String: Any])
+  }
+
+  @objc
+  func cancelMetadataExtraction(_ jobId: String,
+                             resolver resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
+    resolve(true)
+  }
+
+  @objc
+  func cancelAllMetadataExtraction(_ resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
+    resolve(true)
+  }
+
   // MARK: - Lifecycle
 
   override static func requiresMainQueueSetup() -> Bool {

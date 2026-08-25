@@ -6,7 +6,7 @@
 
 
 
-\*\*Version:\*\* 1.0
+\*\*Version:\*\* 3.3.1
 
 
 
@@ -1129,6 +1129,8 @@ Potential extensions include:
 \* Incremental indexing engine
 
 \* Cross-platform abstraction for iOS
+
+For a detailed metadata subsystem architecture, see [docs/metadata-architecture.md](docs/metadata-architecture.md).
 
 
 

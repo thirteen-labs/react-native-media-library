@@ -1,25 +1,31 @@
 export type MediaMetaType = "audio" | "video" | "image" | "document";
 
+export type MetadataLevel = "basic" | "standard" | "full" | "raw";
+
 /**
- * Rich, deep metadata for a single media item. Returned by `getDetailedMetadata`
- * and `getDetailedMetadataByUri`. Technical/Capture metadata is extracted by
- * opening the file (MediaExtractor / ExifInterface on Android, AVAsset /
- * CGImageSource on iOS), so it is only populated on demand — not in bulk queries.
+ * Rich, deep metadata for a single media item. Returned by `getMetadata`,
+ * `getDetailedMetadata`, and `getDetailedMetadataByUri`. Technical/Capture
+ * metadata is extracted by opening the file (MediaExtractor / ExifInterface
+ * on Android, AVAsset / CGImageSource on iOS), so it is only populated on
+ * demand — not in bulk queries.
  */
 export interface DetailedMetadata {
   mediaType: MediaMetaType;
   mimeType: string;
   fileSize: number;
-  /** Container/wrapper format, e.g. "mp4", "mpeg-4", "matroska", "mpeg-4-visual". */
+  /** Container/wrapper format, e.g. "mp4", "mpeg-4", "matroska". */
   containerFormat?: string;
-  /** Present for audio and video. */
+  /** Present for audio and video. Duration in milliseconds. */
   durationMs?: number;
   audio?: AudioFormatMetadata;
   video?: VideoFormatMetadata;
   image?: ImageFormatMetadata;
   document?: DocumentFormatMetadata;
-  /** Platform-specific extras that were not mapped into the typed sections. */
+  artwork?: ArtworkMetadata;
+  /** Raw provider-specific payload (level="raw") — intentionally open-ended. */
   raw?: Record<string, unknown>;
+  /** Allow future extension without breaking existing code. */
+  [key: string]: unknown;
 }
 
 export interface AudioFormatMetadata {
@@ -42,6 +48,22 @@ export interface AudioFormatMetadata {
   durationMs?: number;
   /** RFC-5646 language tag, e.g. "en". */
   language?: string;
+
+  // Identity tags (from MediaMetadataRetriever)
+  title?: string;
+  artist?: string;
+  album?: string;
+  albumArtist?: string;
+  composer?: string;
+  genre?: string;
+  author?: string;
+  writer?: string;
+  /** Track number (may contain "/" separator for totalTracks). */
+  trackNumber?: number;
+  totalTracks?: number;
+  discNumber?: number;
+  totalDiscs?: number;
+  year?: number;
 }
 
 export interface VideoFormatMetadata {
@@ -60,13 +82,24 @@ export interface VideoFormatMetadata {
   frameRate?: number;
   /** Display rotation in degrees. */
   rotation?: number;
+  /** Capture framerate (slow-mo indicator). */
+  captureFrameRate?: number;
+  /** Total frame count. */
+  frameCount?: number;
   /** Colour space, e.g. "BT.709", "BT.601", "BT.2020". */
   colorSpace?: string;
   colorStandard?: string;
   colorTransfer?: string;
+  colorRange?: string;
   hasBFrames?: boolean;
   durationMs?: number;
   language?: string;
+  /** Audio track information (if video has an audio track). */
+  audioTrack?: {
+    codecMime?: string;
+    channels?: number;
+    sampleRate?: number;
+  };
 }
 
 export interface ImageFormatMetadata {
@@ -75,9 +108,21 @@ export interface ImageFormatMetadata {
   width?: number;
   height?: number;
   bitsPerSample?: number;
-  /** e.g. "RGB", "YCbCr", "Gray". */
+  /** e.g. "sRGB", "AdobeRGB", "Uncalibrated". */
   colorSpace?: string;
   exif?: ExifMetadata;
+  /** GPS location metadata with redaction awareness. */
+  location?: ImageLocation;
+}
+
+export interface ImageLocation {
+  latitude: number | null;
+  longitude: number | null;
+  altitude?: number | null;
+  /** Whether GPS data exists at all. */
+  available: boolean;
+  /** Whether Android redacted the GPS data (requires ACCESS_MEDIA_LOCATION). */
+  redacted: boolean;
 }
 
 export interface ExifMetadata {
@@ -93,6 +138,8 @@ export interface ExifMetadata {
   dateTimeOriginal?: number;
   /** Epoch milliseconds. */
   dateTimeDigitized?: number;
+  /** Epoch milliseconds. */
+  dateTime?: number;
   orientation?: number;
   /** F-number (e.g. 2.8). */
   aperture?: number;
@@ -150,4 +197,74 @@ export interface DocumentFormatMetadata {
   creationDate?: number;
   /** Epoch milliseconds. */
   modificationDate?: number;
+}
+
+export interface ArtworkMetadata {
+  /** Whether embedded artwork is available. */
+  available: boolean;
+  /** URI to retrieve artwork (content:// or file path). */
+  uri?: string;
+}
+
+/** Extraction status for a metadata operation. */
+export type ExtractionStatus = "complete" | "partial" | "failed" | "cancelled";
+
+/** Structured metadata error codes. */
+export type MetadataErrorCode =
+  | "PERMISSION_DENIED"
+  | "FILE_NOT_FOUND"
+  | "URI_UNAVAILABLE"
+  | "UNSUPPORTED_FORMAT"
+  | "CORRUPTED_FILE"
+  | "EXTRACTION_FAILED"
+  | "METADATA_UNAVAILABLE"
+  | "API_NOT_SUPPORTED"
+  | "MEDIA_REDACTED"
+  | "TIMEOUT"
+  | "CANCELLED"
+  | "UNKNOWN_ERROR";
+
+/** Result of a metadata extraction operation. */
+export interface MetadataExtractionResult {
+  metadata: DetailedMetadata;
+  status: ExtractionStatus;
+  warnings: string[];
+  errorCode: MetadataErrorCode | null;
+}
+
+/** Source from which a metadata value was extracted. */
+export type MetadataSource =
+  | "mediastore"
+  | "exif"
+  | "retriever"
+  | "extractor"
+  | "embedded"
+  | "filename"
+  | "fallback"
+  | "unknown";
+
+/** A metadata value with provenance information. */
+export interface MetadataField<T = unknown> {
+  value: T;
+  source: MetadataSource;
+}
+
+/** Diagnostic result from inspectMetadata(). */
+export interface MetadataInspection {
+  uri: string;
+  mimeType?: string;
+  sources: {
+    mediaStore: boolean;
+    mediaMetadataRetriever: boolean;
+    exif: boolean;
+  };
+  fields: Record<string, MetadataField>;
+  warnings: string[];
+  status: ExtractionStatus;
+}
+
+/** Options for the getMetadata() API call. */
+export interface MetadataOptions {
+  /** Extraction depth: "basic" (fast), "standard" (library views), "full" (deep). Default: "full". */
+  level?: MetadataLevel;
 }
