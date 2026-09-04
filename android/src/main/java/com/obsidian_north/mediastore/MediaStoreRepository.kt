@@ -64,6 +64,34 @@ class MediaStoreRepository(private val context: Context) {
     return metadataService.extractMetadataByUri(uri).metadata.ifEmpty { null }
   }
 
+  fun getPathByUri(uriString: String): String? {
+    try {
+      val uri = Uri.parse(uriString)
+      val mediaType = detectMediaTypeFromUri(uri)
+      val projection = arrayOf(MediaStore.MediaColumns.DATA)
+      val cursor: Cursor? = when (mediaType) {
+        "audio" -> repository.queryAudio(projection, "${MediaStore.Audio.Media._ID} = ?", null, null)
+        "video" -> repository.queryVideo(projection, "${MediaStore.Video.Media._ID} = ?", null, null)
+        "image" -> repository.queryImages(projection, "${MediaStore.Images.Media._ID} = ?", null, null)
+        "document" -> {
+          val docProjection = arrayOf(MediaStore.Files.FileColumns.DATA)
+          repository.queryDocuments(docProjection, "${MediaStore.Files.FileColumns._ID} = ?", null, null)
+        }
+        else -> null
+      }
+      return cursor?.use { if (it.moveToFirst()) CursorUtils.getString(it, MediaStore.MediaColumns.DATA) else null }
+    } catch (e: Exception) { null }
+  }
+
+  private fun detectMediaTypeFromUri(uri: Uri): String {
+    return when {
+      uri.authority.contains("media") && uri.pathSegments.firstOrNull() == "audio" -> "audio"
+      uri.authority.contains("media") && uri.pathSegments.firstOrNull() == "video" -> "video"
+      uri.authority.contains("media") && uri.pathSegments.firstOrNull() == "images" -> "image"
+      else -> "document"
+    }
+  }
+
   fun search(options: SearchOptionsRecord): SearchResultRecord {
     val query = options.query.trim()
     val searchFilter = "${MediaStore.MediaColumns.TITLE} LIKE ? OR ${MediaStore.MediaColumns.DISPLAY_NAME} LIKE ?"

@@ -501,6 +501,71 @@ export async function getLastRefreshTimestamp(): Promise<number> {
   return NativeModule.getLastRefreshTimestamp();
 }
 
+export async function getPathByUri(uri: string): Promise<string | null> {
+  return NativeModule.getPathByUri(uri);
+}
+
+export async function fileExists(filePath: string): Promise<boolean> {
+  return NativeModule.fileExists(filePath);
+}
+
+export async function readDirectory(dirPath: string): Promise<Array<{name: string, path: string, isDirectory: boolean}>> {
+  return NativeModule.readDirectory(dirPath);
+}
+
+export async function readDirectoryRecursive(dirPath: string): Promise<Array<{name: string, path: string, isDirectory: boolean}>> {
+  return NativeModule.readDirectoryRecursive(dirPath);
+}
+
+export async function fileSize(filePath: string): Promise<number> {
+  return NativeModule.fileSize(filePath);
+}
+
+export async function createFile(filePath: string): Promise<string> {
+  return NativeModule.createFile(filePath);
+}
+
+export async function renameFile(oldPath: string, newPath: string): Promise<string> {
+  return NativeModule.renameFile(oldPath, newPath);
+}
+
+export async function deleteFile(filePath: string): Promise<boolean> {
+  return NativeModule.deleteFile(filePath);
+}
+
+export async function copyFile(srcPath: string, dstPath: string): Promise<string> {
+  return NativeModule.copyFile(srcPath, dstPath);
+}
+
+export async function moveFile(srcPath: string, dstPath: string): Promise<string> {
+  return NativeModule.moveFile(srcPath, dstPath);
+}
+
+export async function getDirectoryStatistics(dirPath: string): Promise<{
+  fileCount: number;
+  totalSize: number;
+  folderCount: number;
+  histogram: {lessThan1MB: number, from1to10MB: number, from10to100MB: number, from100MBto1GB: number, greaterThan1GB: number}
+}> {
+  return NativeModule.getDirectoryStatistics(dirPath);
+}
+
+export async function getMimeType(filePath: string): Promise<string> {
+  return NativeModule.getMimeType(filePath);
+}
+
+export async function getFileExtension(filePath: string): Promise<string> {
+  return NativeModule.getFileExtension(filePath);
+}
+
+export async function readFileContents(filePath: string): Promise<string | null> {
+  return NativeModule.readFileContents(filePath);
+}
+
+export async function writeFileContents(filePath: string, data: string): Promise<boolean> {
+  return NativeModule.writeFileContents(data, filePath);
+}
+
 export function registerPlugin(plugin: MetadataPlugin): void {
   if (!plugin.id || !plugin.name || !plugin.version || typeof plugin.extract !== "function") {
     throw new Error("Invalid plugin: must have id, name, version, and extract function");

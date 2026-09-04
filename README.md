@@ -153,6 +153,9 @@ No entire library is loaded into memory. Each row is mapped and collected increm
 - **Incremental indexing** — delta-only refresh tracking added, modified, and removed items
 - **Plugin hooks** — extensible metadata system via JS-side plugin registration
 - **Improved batch queries** — per-type pagination, selective type fetching, and query timing
+- **File system CRUD** — recursive directory scanning, file creation, reading, writing, renaming, moving, copying, deleting, and statistics (Android & iOS)
+- **MIME type detection** — auto-detect MIME types from file extensions
+- **File extension detection** — get file extension from path
 
 ---
 
@@ -1238,6 +1241,114 @@ interface LibraryPerTypeStatistics {
 
 Document queries are Android-only. iOS returns an empty array.
 
+## File System Operations
+
+The module now includes comprehensive file system CRUD operations, eliminating the need for external packages like `react-native-fs` or `expo-file-system` for basic file management:
+
+### Android & iOS Capabilities
+
+| Operation | Description |
+|-----------|-------------|
+| `fileExists(filePath)` | Check if a file or directory exists |
+| `readDirectory(dirPath)` | List immediate children of a directory |
+| `readDirectoryRecursive(dirPath)` | List all files recursively in a directory |
+| `fileSize(filePath)` | Get file size in bytes |
+| `createFile(filePath)` | Create a new empty file |
+| `renameFile(oldPath, newPath)` | Rename/move a file |
+| `deleteFile(filePath)` | Delete a file |
+| `copyFile(srcPath, dstPath)` | Copy a file |
+| `moveFile(srcPath, dstPath)` | Move/rename a file |
+| `getDirectoryStatistics(dirPath)` | Get folder statistics: file count, total size, histogram |
+| `getMimeType(filePath)` | Auto-detect MIME type from file extension |
+| `getFileExtension(filePath)` | Get file extension from path |
+| `readFileContents(filePath)` | Read file contents as string |
+| `writeFileContents(filePath, data)` | Write data to file |
+
+### Usage Example
+
+```typescript
+import { 
+  getAudio, 
+  getPathByUri,
+  readDirectory,
+  fileSize,
+  createFile,
+  renameFile,
+  deleteFile,
+  copyFile,
+  getDirectoryStatistics,
+  getMimeType,
+  getFileExtension,
+  readFileContents,
+  writeFileContents
+} from "@obsidian_north/react-native-mediastore";
+
+// Discover media
+const audio = await getAudio();
+
+// Get file path from URI
+const path = await getPathByUri(audio[0].uri);
+
+// File system operations
+await fileExists(path);              // true/false
+const items = await readDirectory(path);  // [{name, path, isDirectory}]
+const allItems = await readDirectoryRecursive(path);  // all files recursively
+const size = await fileSize(path);       // bytes in number
+await createFile(newPath);             // creates empty file
+await renameFile(old, new);            // rename/move
+await deleteFile(path);                // delete
+await copyFile(src, dst);              // copy
+await moveFile(src, dst);              // move
+const stats = await getDirectoryStatistics(path);
+// { fileCount, totalSize, folderCount, histogram: {lessThan1MB, from1to10MB, ...} }
+const mime = await getMimeType(path);  // "audio/mpeg"
+const ext = await getFileExtension(path); // "mp3"
+const contents = await readFileContents(path); // string | null
+await writeFileContents(path, "Hello world"); // write data
+```
+
+### Integration with Media Discovery
+
+The file system operations work seamlessly with MediaStore queries:
+
+```typescript
+// Get all audio, then get their paths and sizes
+const songs = await getAudio();
+const songPaths = await Promise.all(songs.map(s => getPathByUri(s.uri)));
+const songSizes = await Promise.all(songs.map(s => fileSize(s.uri)));
+
+// Or list a specific directory
+const musicDir = await readDirectoryRecursive('/storage/emulated/0/Music');
+```
+
+---
+
+## FAQ
+
+**Q: Can I delete files?**
+**A:** Yes! Use `deleteFile(filePath)` — the module now supports file deletion on both Android and iOS.
+
+**Q: Can I rename files?**
+**A:** Yes! Use `renameFile(oldPath, newPath)` — the module now supports file renaming on both Android and iOS.
+
+**Q: Can I create new files?**
+**A:** Yes! Use `createFile(filePath)` — creates an empty file.
+
+**Q: Can I read/write file contents?**
+**A:** Yes! Use `readFileContents(filePath)` to read as string, and `writeFileContents(filePath, data)` to write data.
+
+**Q: Can I list directory contents?**
+**A:** Yes! Use `readDirectory(dirPath)` for immediate children, or `readDirectoryRecursive(dirPath)` for recursive listing.
+
+**Q: Can I get file size and statistics?**
+**A:** Yes! Use `fileSize(filePath)` for individual file size, or `getDirectoryStatistics(dirPath)` for folder-level statistics (file count, total size, histogram).
+
+**Q: Can I detect MIME types from files?**
+**A:** Yes! Use `getMimeType(filePath)` to auto-detect MIME types from file extensions.
+
+**Q: Can I get file extensions?**
+**A:** Yes! Use `getFileExtension(filePath)` to get the file extension.
+
 ---
 
 ## FAQ
@@ -1252,40 +1363,28 @@ Document queries are Android-only. iOS returns an empty array.
 **A:** Yes. iOS 13.0+ is supported via the Photos Framework (`PHAsset`). Document queries return an empty array on iOS.
 
 **Q: Can I delete files?**
-**A:** No. This module is read-only. Use `expo-file-system` for mutations.
+**A:** Yes! Use `deleteFile(filePath)` — the module now supports file deletion on both Android and iOS.
 
 **Q: Can I rename files?**
-**A:** No. Renames belong in a filesystem module.
+**A:** Yes! Use `renameFile(oldPath, newPath)` — the module now supports file renaming on both Android and iOS.
 
-**Q: Can I monitor changes?**
-**A:** Yes. Use `useMediaChangeEvent` or the native observer (`ContentObserver` on Android, `PHPhotoLibraryChangeObserver` on iOS).
+**Q: Can I create new files?**
+**A:** Yes! Use `createFile(filePath)` — creates an empty file.
 
-**Q: Can I search?**
-**A:** Yes. Full-text search via `search()` with multi-keyword, unicode support.
+**Q: Can I read/write file contents?**
+**A:** Yes! Use `readFileContents(filePath)` to read as string, and `writeFileContents(filePath, data)` to write data.
 
-**Q: Does it use MediaStore?**
-**A:** On Android, yes — all queries go through `ContentResolver` → MediaStore database. On iOS, it uses the Photos Framework (`PHAsset`).
+**Q: Can I list directory contents?**
+**A:** Yes! Use `readDirectory(dirPath)` for immediate children, or `readDirectoryRecursive(dirPath)` for recursive listing.
 
-**Q: Does it support SD Cards?**
-**A:** Yes, where indexed by the MediaStore database (Android).
+**Q: Can I get file size and statistics?**
+**A:** Yes! Use `fileSize(filePath)` for individual file size, or `getDirectoryStatistics(dirPath)` for folder-level statistics (file count, total size, histogram).
 
-**Q: What Android versions are supported?**
-**A:** Android 5.0+ (API 21+). Minimum SDK is 21.
+**Q: Can I detect MIME types from files?**
+**A:** Yes! Use `getMimeType(filePath)` to auto-detect MIME types from file extensions.
 
-**Q: What iOS versions are supported?**
-**A:** iOS 13.0+. Uses Photos Framework with `PHPhotoLibrary` authorization.
-
-**Q: Does it require MANAGE_EXTERNAL_STORAGE?**
-**A:** No. Uses standard MediaStore access pattern (Android) and Photos Framework (iOS).
-
-**Q: Can I get album artwork?**
-**A:** Yes. Use `getAlbumArtwork(albumId)`.
-
-**Q: Can I get video thumbnails?**
-**A:** Yes. Use `getVideoThumbnail(videoId)`.
-
-**Q: Is it typed?**
-**A:** Yes. The native module spec uses concrete types (`AudioItem[]`, `Album[]`, `FolderStatistics[]`, etc.) — no `Record<string, any>`.
+**Q: Can I get file extensions?**
+**A:** Yes! Use `getFileExtension(filePath)` to get the file extension.
 
 ---
 

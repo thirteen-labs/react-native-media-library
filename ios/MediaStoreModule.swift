@@ -130,11 +130,18 @@ class MediaStoreModule: RCTEventEmitter {
 
   // MARK: - Search
 
-  @objc
-  func search(_ options: NSDictionary,
-             resolver resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
+@objc
+  func getByUri(_ uri: String,
+               resolver resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
     let repository = MediaStoreRepository()
-    resolve(repository.search(options: options as! [String: Any?]))
+    resolve(repository.getByUri(uri: uri))
+  }
+
+  @objc
+  func getPathByUri(_ uri: String,
+                   resolver resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
+    let repository = MediaStoreRepository()
+    resolve(repository.getPathByUri(uri: uri))
   }
 
   // MARK: - Lookups
@@ -160,11 +167,74 @@ class MediaStoreModule: RCTEventEmitter {
     resolve(repository.getDetailedMetadata(mediaType: mediaType, id: id))
   }
 
-  @objc
-  func getDetailedMetadataByUri(_ uri: String,
-                                resolver resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
+@objc
+  func getByUri(_ uri: String,
+               resolver resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
     let repository = MediaStoreRepository()
-    resolve(repository.getDetailedMetadataByUri(uri: uri))
+    resolve(repository.getByUri(uri: uri))
+  }
+
+  @objc
+  func fileExists(atPath path: String,
+                 resolver resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
+    let repository = MediaStoreRepository()
+    resolve(repository.fileExists(atPath: path))
+  }
+
+  @objc
+  func readDirectory(atPath path: String,
+                     resolver resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
+    let repository = MediaStoreRepository()
+    resolve(repository.readDirectory(atPath: path))
+  }
+
+  @objc
+  func readDirectoryRecursive(atPath path: String,
+                             resolver resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
+    let repository = MediaStoreRepository()
+    resolve(repository.readDirectoryRecursive(atPath: path))
+  }
+
+  @objc
+  func fileSize(atPath path: String,
+                resolver resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
+    let repository = MediaStoreRepository()
+    resolve(repository.fileSize(atPath: path))
+  }
+
+  @objc
+  func createFile(atPath path: String,
+                 resolver resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
+    let repository = MediaStoreRepository()
+    resolve(repository.createFile(atPath: path))
+  }
+
+  @objc
+  func renameFile(oldPath: String, newPath: String,
+                 resolver resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
+    let repository = MediaStoreRepository()
+    resolve(repository.renameItem(atPath: oldPath, to: newPath))
+  }
+
+  @objc
+  func deleteFile(atPath path: String,
+                 resolver resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
+    let repository = MediaStoreRepository()
+    resolve(repository.deleteItem(atPath: path))
+  }
+
+  @objc
+  func copyFile(srcPath: String, dstPath: String,
+               resolver resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
+    let repository = MediaStoreRepository()
+    resolve(repository.copyItem(atPath: srcPath, to: dstPath))
+  }
+
+  @objc
+  func moveFile(srcPath: String, dstPath: String,
+               resolver resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
+    let repository = MediaStoreRepository()
+    resolve(repository.renameItem(atPath: srcPath, to: dstPath))
   }
 
   // MARK: - Recent

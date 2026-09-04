@@ -25,7 +25,7 @@ android {
 
     androidResources {
         // This module ships no resources; avoid transitive R-class overhead.
-        nonTransitiveRClass = true
+        isNonTransitiveRClass = true
     }
 
     lint {

@@ -429,6 +429,11 @@ class MediaStoreModule(reactContext: ReactApplicationContext) : ReactContextBase
   }
 
   @ReactMethod
+  fun getPathByUri(uri: String, promise: Promise) {
+    coroutineMethod({ repository.getPathByUri(uri) }, promise)
+  }
+
+  @ReactMethod
   fun checkPermissions(promise: Promise) {
     promise.resolve(Arguments.makeNativeMap(permissions.checkStatus()))
   }
@@ -602,9 +607,165 @@ class MediaStoreModule(reactContext: ReactApplicationContext) : ReactContextBase
     return digest.digest().joinToString("") { "%02x".format(it) }
   }
 
-  override fun onCatalystInstanceDestroy() {
-    moduleScope.cancel()
-    if (isObserving) observer.stopListening()
-    super.onCatalystInstanceDestroy()
+  // --- File System Operations ---
+
+  @ReactMethod
+  fun fileExists(filePath: String, promise: Promise) {
+    coroutineMethod({ File(filePath).exists() }, promise)
   }
-}
+
+  @ReactMethod
+  fun readDirectory(dirPath: String, promise: Promise) {
+    coroutineMethod({
+      val dir = File(dirPath)
+      if (!dir.exists() || !dir.isDirectory) return@coroutineMethod emptyList<String>()
+      return dir.listFiles()?.map { it.absolutePath } ?: emptyList<String>()
+    }, promise)
+  }
+
+  @ReactMethod
+  fun readDirectoryRecursive(dirPath: String, promise: Promise) {
+    coroutineMethod({
+      val dir = File(dirPath)
+      if (!dir.exists() || !dir.isDirectory) return@coroutineMethod emptyList<String>()
+      val result = mutableListOf<String>()
+      recursiveListFiles(dir, result)
+      return result
+    }, promise)
+  }
+
+  private suspend fun recursiveListFiles(dir: File, result: MutableList<String>) {
+    val files = dir.listFiles() ?: return
+    for (file in files) {
+      if (file.isDirectory) {
+        recursiveListFiles(file, result)
+      } else {
+        result.add(file.absolutePath)
+      }
+    }
+  }
+
+  @ReactMethod
+  fun fileSize(filePath: String, promise: Promise) {
+    coroutineMethod({
+      val file = File(filePath)
+      if (!file.exists()) return@coroutineMethod 0L
+      return file.length()
+    }, promise)
+  }
+
+  @ReactMethod
+  fun createFile(filePath: String, promise: Promise) {
+    coroutineMethod({
+      val file = File(filePath)
+      file.parentFile?.mkdirs()
+      if (file.createNewFile()) {
+        file.toURI().toString()
+      } else {
+        ""
+      }
+    }, promise)
+  }
+
+  @ReactMethod
+  fun renameFile(oldPath: String, newPath: String, promise: Promise) {
+    coroutineMethod({
+      val file = File(oldPath)
+      if (file.renameTo(File(newPath))) {
+        newPath
+      } else {
+        ""
+      }
+    }, promise)
+  }
+
+  @ReactMethod
+  fun deleteFile(filePath: String, promise: Promise) {
+    coroutineMethod({
+      val file = File(filePath)
+      return file.delete()
+    }, promise)
+  }
+
+  @ReactMethod
+  fun copyFile(srcPath: String, dstPath: String, promise: Promise) {
+    coroutineMethod({
+      val src = File(srcPath)
+      val dst = File(dstPath)
+      dst.parentFile?.mkdirs()
+      if (src.exists()) {
+        dst.writeBytes(src.readBytes())
+        dst.absolutePath
+      } else ""
+    }, promise)
+  }
+
+  @ReactMethod
+  fun moveFile(srcPath: String, dstPath: String, promise: Promise) {
+    coroutineMethod({
+      val src = File(srcPath)
+      val dst = File(dstPath)
+      dst.parentFile?.mkdirs()
+      if (src.renameTo(dst)) {
+        dst.absolutePath
+      } else ""
+    }, promise)
+  }
+
+  @ReactMethod
+  fun getDirectoryStatistics(dirPath: String, promise: Promise) {
+    coroutineMethod({
+      val dir = File(dirPath)
+      if (!dir.exists() || !dir.isDirectory) return mapOf(
+        "fileCount": 0, "totalSize": 0L, "folderCount": 0,
+        "histogram": mapOf("lessThan1MB": 0, "from1to10MB": 0, "from10to100MB": 0, "from100MBto1GB": 0, "greaterThan1GB": 0)
+      )
+      var fileCount = 0L
+      var totalSize = 0L
+      var folderCount = 0
+      val histogram = mutableMapOf<String, Int>(
+        "lessThan1MB" to 0, "from1to10MB" to 0, "from10to100MB" to 0, "from100MBto1GB" to 0, "greaterThan1GB" to 0
+      )
+      recursiveStats(dir, fileCount, totalSize, folderCount, histogram)
+      return mapOf(
+        "fileCount": fileCount, "totalSize": totalSize, "folderCount": folderCount,
+        "histogram": histogram
+      )
+    }, promise)
+  }
+
+  private suspend fun recursiveStats(dir: File, var fileCount: Long, var totalSize: Long, var folderCount: Int, histogram: MutableMap<String, Int>) {
+    val files = dir.listFiles() ?: return
+    folderCount++
+    for (file in files) {
+      if (file.isDirectory) {
+        recursiveStats(file, fileCount, totalSize, folderCount, histogram)
+      } else {
+        fileCount++
+        totalSize += file.length()
+        val sizeMB = file.length() / (1024 * 1024)
+        if (sizeMB < 1) { histogram["lessThan1MB"] = (histogram["lessThan1MB"] ?: 0) + 1 }
+        else if (sizeMB < 10) { histogram["from1to10MB"] = (histogram["from1to10MB"] ?: 0) + 1 }
+        else if (sizeMB < 100) { histogram["from10to100MB"] = (histogram["from10to100MB"] ?: 0) + 1 }
+        else if (sizeMB < 1024) { histogram["from100MBto1GB"] = (histogram["from100MBto1GB"] ?: 0) + 1 }
+        else { histogram["greaterThan1GB"] = (histogram["greaterThan1GB"] ?: 0) + 1 }
+      }
+    }
+  }
+
+  // --- Mime Type Detection ---
+
+  @ReactMethod
+  fun getMimeType(filePath: String, promise: Promise) {
+    coroutineMethod({
+      val ext = File(filePath).extension
+      MimeUtils.getMimeType(ext)
+    }, promise)
+  }
+
+  @ReactMethod
+  fun getFileExtension(filePath: String, promise: Promise) {
+    coroutineMethod({
+      File(filePath).extension
+    }, promise)
+  }

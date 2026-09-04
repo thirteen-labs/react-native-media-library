@@ -50,6 +50,27 @@ export interface Spec extends TurboModule {
   refresh(): Promise<void>;
   refreshIncremental(lastTimestamp: number | null): Promise<IncrementalChanges>;
   getLastRefreshTimestamp(): Promise<number>;
+  getPathByUri(uri: string): Promise<string | null>;
+  // File System Operations
+  fileExists(filePath: string): Promise<boolean>;
+  readDirectory(dirPath: string): Promise<Array<{name: string, path: string, isDirectory: boolean}>>;
+  readDirectoryRecursive(dirPath: string): Promise<Array<{name: string, path: string, isDirectory: boolean}>>;
+  fileSize(filePath: string): Promise<number>;
+  createFile(filePath: string): Promise<string>;
+  renameFile(oldPath: string, newPath: string): Promise<string>;
+  deleteFile(filePath: string): Promise<boolean>;
+  copyFile(srcPath: string, dstPath: string): Promise<string>;
+  moveFile(srcPath: string, dstPath: string): Promise<string>;
+  getDirectoryStatistics(dirPath: string): Promise<{
+    fileCount: number;
+    totalSize: number;
+    folderCount: number;
+    histogram: {lessThan1MB: number, from1to10MB: number, from10to100MB: number, from100MBto1GB: number, greaterThan1GB: number}
+  }>;
+  getMimeType(filePath: string): Promise<string>;
+  getFileExtension(filePath: string): Promise<string>;
+  readFileContents(filePath: string): Promise<string | null>;
+  writeFileContents(filePath: string, data: string | Uint8Array): Promise<boolean>;
   checkPermissions(): Promise<PermissionStatus>;
   requestPermissions(): Promise<PermissionStatus>;
   getAlbumArtwork(albumId: string): Promise<string | null>;

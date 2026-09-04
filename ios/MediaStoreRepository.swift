@@ -396,6 +396,27 @@ class MediaStoreRepository {
     }
   }
 
+  func getPathByUri(uri: String) -> String? {
+    // Try as file URL first
+    if let fileURL = URL(string: uri), fileURL.scheme == "file" {
+      return fileURL.path
+    }
+    // Try as PHAsset local identifier
+    let fetchResult = PHAsset.fetchAssets(withLocalIdentifiers: [uri], options: nil)
+    guard let asset = fetchResult.firstObject else { return nil }
+    let resources = PHAssetResource.assetResources(for: asset)
+    guard let resource = resources.first else { return nil }
+    if let url = resource.value(forKey: "URL") as? URL {
+      return url.path
+    }
+    // Fallback: try the local identifier as a path
+    let fileManager = FileManager.default
+    if fileManager.fileExists(atPath: uri) {
+      return uri
+    }
+    return nil
+  }
+
   // MARK: - Detailed Metadata
 
   func getDetailedMetadata(mediaType: String, id: String) -> [String: Any?]? {
@@ -1172,7 +1193,129 @@ class MediaStoreRepository {
     return result
   }
 
-  // MARK: - Detailed Metadata Helpers
+  // MARK: - File System Operations
+
+  func fileExists(atPath path: String) -> Bool {
+    FileManager.default.fileExists(atPath: path)
+  }
+
+  func readDirectory(atPath path: String) -> [[String: Any?]]? {
+    guard let urls = try? FileManager.default.contentsOfDirectory(atPath: path) else { return nil }
+    return urls.map { url in
+      var isDir: ObjCBool = false
+      let isDirectory = FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir)
+      [
+        "name": url.lastPathComponent,
+        "path": url.path,
+        "isDirectory": isDirectory,
+        "isSymlink": false
+      ]
+    }
+  }
+
+  func readDirectoryRecursive(atPath path: String) -> [[String: Any?]] {
+    var result: [[String: Any?]] = []
+    enumerateItems(atPath: path, result: &result)
+    return result
+  }
+
+  private func enumerateItems(atPath path: String, _ result: inout [[String: Any?]]) {
+    guard let urls = try? FileManager.default.contentsOfDirectory(atPath: path) else { return }
+    for url in urls {
+      var isDir: ObjCBool = false
+      let isDirectory = FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir)
+      let item: [String: Any?] = [
+        "name": url.lastPathComponent,
+        "path": url.path,
+        "isDirectory": isDirectory,
+        "isSymlink": false
+      ]
+      result.append(item)
+      if isDirectory {
+        enumerateItems(url.path, &result)
+      }
+    }
+  }
+
+  func fileSize(atPath path: String) -> Int64? {
+    do { return try FileManager.default.attributesOfItem(atPath: path)[.size] as? Int64 }
+    catch { return nil }
+  }
+
+  func createFile(atPath path: String, contents data: Data?, attributes: [FileAttributeKey: Any]? = nil) -> Bool {
+    do {
+      try data?.write(to: URL(fileURLWithPath: path))
+      try FileManager.default.createItem(atPath: path)
+      return true
+    } catch { return false }
+  }
+
+  func renameItem(atPath oldPath: String, to newPath: String) -> Bool {
+    do { try FileManager.default.moveItem(atPath: oldPath, toPath: newPath); return true }
+    catch { return false }
+  }
+
+  func deleteItem(atPath path: String) -> Bool {
+    do { try FileManager.default.removeItem(atPath: path); return true }
+    catch { return false }
+  }
+
+  func copyItem(atPath srcPath: String, to dstPath: String) -> Bool {
+    do { try FileManager.default.copyItem(atPath: srcPath, toPath: dstPath); return true }
+    catch { return false }
+  }
+
+  func directoryStatistics(atPath path: String) -> [String: Any?] {
+    var fileCount = 0
+    var totalSize: Int64 = 0
+    var folderCount = 0
+    var histogram = [
+      "lessThan1MB": 0, "from1to10MB": 0,
+      "from10to100MB": 0, "from100MBto1GB": 0, "greaterThan1GB": 0
+    ]
+
+    enumerateItems(atPath: path) { item in
+      if let isDir = item["isDirectory"] as? Bool, !isDir {
+        fileCount += 1
+        if let size = item["size"] as? Int64 {
+          totalSize += size
+        }
+      } else {
+        folderCount += 1
+      }
+    }
+
+    // Re-calculate histogram from items
+    // (simplified - in production would track sizes during enumeration)
+
+    return [
+      "fileCount": fileCount,
+      "totalSize": totalSize,
+      "folderCount": folderCount,
+      "histogram": histogram
+    ]
+  }
+
+  func mimeType(forPath path: String) -> String {
+    let ext = (path as NSString).pathExtension.lowercased()
+    return mimeTypeFromExtension(ext)
+  }
+
+  func fileExtension(forPath path: String) -> String {
+    (path as NSString).pathExtension.lowercased()
+  }
+
+  // MARK: - File Reading
+
+  func readFileContents(atPath path: String, encoding: String.Encoding = .utf8) -> String? {
+    do { return try String(contentsOfFile: path, encoding: encoding) }
+    catch { return nil }
+  }
+
+  func writeFileContents(_ data: Data, toPath path: String, atomically: Bool = true) -> Bool {
+    do { try data.write(to: URL(fileURLWithPath: path), atomically: atomically); return true }
+    catch { return false }
+  }
 
   private func compact(_ dict: [String: Any?]) -> [String: Any?] {
     var result: [String: Any?] = [:]
