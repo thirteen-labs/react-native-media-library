@@ -6,6 +6,7 @@ import android.net.Uri
 import android.provider.MediaStore
 import com.obsidian_north.mediastore.metadata.MetadataService
 import com.obsidian_north.mediastore.models.*
+import com.obsidian_north.mediastore.utils.CursorUtils
 import com.obsidian_north.mediastore.utils.MimeUtils
 
 class MediaStoreRepository(private val context: Context) {
@@ -70,24 +71,24 @@ class MediaStoreRepository(private val context: Context) {
       val mediaType = detectMediaTypeFromUri(uri)
       val projection = arrayOf(MediaStore.MediaColumns.DATA)
       val cursor: Cursor? = when (mediaType) {
-        "audio" -> repository.queryAudio(projection, "${MediaStore.Audio.Media._ID} = ?", null, null)
-        "video" -> repository.queryVideo(projection, "${MediaStore.Video.Media._ID} = ?", null, null)
-        "image" -> repository.queryImages(projection, "${MediaStore.Images.Media._ID} = ?", null, null)
+        "audio" -> queryAudio(projection, "${MediaStore.Audio.Media._ID} = ?", null, null)
+        "video" -> queryVideo(projection, "${MediaStore.Video.Media._ID} = ?", null, null)
+        "image" -> queryImages(projection, "${MediaStore.Images.Media._ID} = ?", null, null)
         "document" -> {
           val docProjection = arrayOf(MediaStore.Files.FileColumns.DATA)
-          repository.queryDocuments(docProjection, "${MediaStore.Files.FileColumns._ID} = ?", null, null)
+          queryDocuments(docProjection, "${MediaStore.Files.FileColumns._ID} = ?", null, null)
         }
         else -> null
       }
       return cursor?.use { if (it.moveToFirst()) CursorUtils.getString(it, MediaStore.MediaColumns.DATA) else null }
-    } catch (e: Exception) { null }
+    } catch (e: Exception) { return null }
   }
 
   private fun detectMediaTypeFromUri(uri: Uri): String {
     return when {
-      uri.authority.contains("media") && uri.pathSegments.firstOrNull() == "audio" -> "audio"
-      uri.authority.contains("media") && uri.pathSegments.firstOrNull() == "video" -> "video"
-      uri.authority.contains("media") && uri.pathSegments.firstOrNull() == "images" -> "image"
+      uri.authority?.contains("media") == true && uri.pathSegments.firstOrNull() == "audio" -> "audio"
+      uri.authority?.contains("media") == true && uri.pathSegments.firstOrNull() == "video" -> "video"
+      uri.authority?.contains("media") == true && uri.pathSegments.firstOrNull() == "images" -> "image"
       else -> "document"
     }
   }

@@ -11,6 +11,7 @@ import com.facebook.react.bridge.*
 import com.facebook.react.modules.core.DeviceEventManagerModule
 import com.obsidian_north.mediastore.models.*
 import com.obsidian_north.mediastore.utils.CursorUtils
+import com.obsidian_north.mediastore.utils.MimeUtils
 import kotlinx.coroutines.*
 import java.io.File
 import java.io.FileOutputStream
@@ -632,7 +633,7 @@ class MediaStoreModule(reactContext: ReactApplicationContext) : ReactContextBase
     coroutineMethod({
       val dir = File(dirPath)
       if (!dir.exists() || !dir.isDirectory) return@coroutineMethod emptyList<String>()
-      return dir.listFiles()?.map { it.absolutePath } ?: emptyList<String>()
+      dir.listFiles()?.map { it.absolutePath } ?: emptyList<String>()
     }, promise)
   }
 
@@ -643,7 +644,7 @@ class MediaStoreModule(reactContext: ReactApplicationContext) : ReactContextBase
       if (!dir.exists() || !dir.isDirectory) return@coroutineMethod emptyList<String>()
       val result = mutableListOf<String>()
       recursiveListFiles(dir, result)
-      return result
+      result
     }, promise)
   }
 
@@ -663,7 +664,7 @@ class MediaStoreModule(reactContext: ReactApplicationContext) : ReactContextBase
     coroutineMethod({
       val file = File(filePath)
       if (!file.exists()) return@coroutineMethod 0L
-      return file.length()
+      file.length()
     }, promise)
   }
 
@@ -696,7 +697,7 @@ class MediaStoreModule(reactContext: ReactApplicationContext) : ReactContextBase
   fun deleteFile(filePath: String, promise: Promise) {
     coroutineMethod({
       val file = File(filePath)
-      return file.delete()
+      file.delete()
     }, promise)
   }
 
@@ -729,39 +730,43 @@ class MediaStoreModule(reactContext: ReactApplicationContext) : ReactContextBase
   fun getDirectoryStatistics(dirPath: String, promise: Promise) {
     coroutineMethod({
       val dir = File(dirPath)
-      if (!dir.exists() || !dir.isDirectory) return mapOf(
+      if (!dir.exists() || !dir.isDirectory) return@coroutineMethod mapOf(
         "fileCount": 0, "totalSize": 0L, "folderCount": 0,
         "histogram": mapOf("lessThan1MB": 0, "from1to10MB": 0, "from10to100MB": 0, "from100MBto1GB": 0, "greaterThan1GB": 0)
       )
-      var fileCount = 0L
-      var totalSize = 0L
-      var folderCount = 0
-      val histogram = mutableMapOf<String, Int>(
-        "lessThan1MB" to 0, "from1to10MB" to 0, "from10to100MB" to 0, "from100MBto1GB" to 0, "greaterThan1GB" to 0
-      )
-      recursiveStats(dir, fileCount, totalSize, folderCount, histogram)
-      return mapOf(
-        "fileCount": fileCount, "totalSize": totalSize, "folderCount": folderCount,
-        "histogram": histogram
+      val stats = DirectoryStats()
+      recursiveStats(dir, stats)
+      mapOf(
+        "fileCount": stats.fileCount, "totalSize": stats.totalSize, "folderCount": stats.folderCount,
+        "histogram": stats.histogram
       )
     }, promise)
   }
 
-  private suspend fun recursiveStats(dir: File, var fileCount: Long, var totalSize: Long, var folderCount: Int, histogram: MutableMap<String, Int>) {
+  private class DirectoryStats(
+    var fileCount: Long = 0L,
+    var totalSize: Long = 0L,
+    var folderCount: Int = 0,
+    val histogram: MutableMap<String, Int> = mutableMapOf(
+      "lessThan1MB" to 0, "from1to10MB" to 0, "from10to100MB" to 0, "from100MBto1GB" to 0, "greaterThan1GB" to 0
+    )
+  )
+
+  private suspend fun recursiveStats(dir: File, stats: DirectoryStats) {
     val files = dir.listFiles() ?: return
-    folderCount++
+    stats.folderCount++
     for (file in files) {
       if (file.isDirectory) {
-        recursiveStats(file, fileCount, totalSize, folderCount, histogram)
+        recursiveStats(file, stats)
       } else {
-        fileCount++
-        totalSize += file.length()
+        stats.fileCount++
+        stats.totalSize += file.length()
         val sizeMB = file.length() / (1024 * 1024)
-        if (sizeMB < 1) { histogram["lessThan1MB"] = (histogram["lessThan1MB"] ?: 0) + 1 }
-        else if (sizeMB < 10) { histogram["from1to10MB"] = (histogram["from1to10MB"] ?: 0) + 1 }
-        else if (sizeMB < 100) { histogram["from10to100MB"] = (histogram["from10to100MB"] ?: 0) + 1 }
-        else if (sizeMB < 1024) { histogram["from100MBto1GB"] = (histogram["from100MBto1GB"] ?: 0) + 1 }
-        else { histogram["greaterThan1GB"] = (histogram["greaterThan1GB"] ?: 0) + 1 }
+        if (sizeMB < 1) { stats.histogram["lessThan1MB"] = (stats.histogram["lessThan1MB"] ?: 0) + 1 }
+        else if (sizeMB < 10) { stats.histogram["from1to10MB"] = (stats.histogram["from1to10MB"] ?: 0) + 1 }
+        else if (sizeMB < 100) { stats.histogram["from10to100MB"] = (stats.histogram["from10to100MB"] ?: 0) + 1 }
+        else if (sizeMB < 1024) { stats.histogram["from100MBto1GB"] = (stats.histogram["from100MBto1GB"] ?: 0) + 1 }
+        else { stats.histogram["greaterThan1GB"] = (stats.histogram["greaterThan1GB"] ?: 0) + 1 }
       }
     }
   }
@@ -772,7 +777,7 @@ class MediaStoreModule(reactContext: ReactApplicationContext) : ReactContextBase
   fun getMimeType(filePath: String, promise: Promise) {
     coroutineMethod({
       val ext = File(filePath).extension
-      MimeUtils.getMimeType(ext)
+      MimeUtils.getMimeFromExtension(ext)
     }, promise)
   }
 
@@ -782,3 +787,4 @@ class MediaStoreModule(reactContext: ReactApplicationContext) : ReactContextBase
       File(filePath).extension
     }, promise)
   }
+}
