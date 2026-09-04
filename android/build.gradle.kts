@@ -78,9 +78,13 @@ dependencies {
     implementation("androidx.exifinterface:exifinterface:1.4.2")
     // Media3 Inspector - modern replacement for MediaMetadataRetriever / MediaExtractor / getFrameAtTime
     // See https://developer.android.com/media/media3/inspector
-    implementation("androidx.media3:media3-common:1.8.0")
-    implementation("androidx.media3:media3-inspector:1.8.0")
-    implementation("androidx.media3:media3-extractor:1.8.0")
+    // NOTE: media3-inspector was first published at 1.9.0-alpha01; 1.8.0 does not exist
+    // (see https://mvnrepository.com/artifact/androidx.media3/media3-inspector).
+    // FrameExtractor moved to :media3-inspector-frame at 1.10.0, so both artifacts are needed.
+    implementation("androidx.media3:media3-common:1.11.0")
+    implementation("androidx.media3:media3-inspector:1.11.0")
+    implementation("androidx.media3:media3-inspector-frame:1.11.0")
+    implementation("androidx.media3:media3-extractor:1.11.0")
     // Only ListenableFuture is needed from Guava (Inspector returns ListenableFuture).
     // Use the minimal artifact to avoid ~3k methods / 1.2MB bloat from full guava:33.x-android.
     implementation("com.google.guava:listenablefuture:1.0")

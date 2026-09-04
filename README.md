@@ -191,7 +191,7 @@ npm install @obsidian_north/react-native-mediastore
 ## Prerequisites
 
 - React Native 0.76+
-- **Android**: API 24+ (Android 7.0) — required for Media3 Inspector (`media3-inspector:1.8.0`); `ExifInterface 1.4.2` also requires 24+
+- **Android**: API 24+ (Android 7.0) — required for Media3 Inspector (`media3-inspector:1.11.0` + `media3-inspector-frame:1.11.0`); `ExifInterface 1.4.2` also requires 24+
   - Android 13+ (API 33): granular media permissions are requested automatically
   - Android 12 and below: `READ_EXTERNAL_STORAGE` permission is required
 - **iOS**: iOS 13.0+ ( Photos Framework ), iOS 16+ uses fast async `AVAsyncProperty` path (`await asset.load(.duration/.tracks)`); iOS 13-15 falls back to sync legacy path
@@ -1532,6 +1532,31 @@ react-native-mediastore/
   ☐ Cloud sync abstraction
   ☐ Cross-platform unified API
 ```
+
+---
+
+## Developers
+
+Built and maintained by:
+
+<div align="center">
+
+<table>
+  <tr>
+    <td align="center" width="50%">
+      <img src="./thirteen-labs.png" width="180" alt="Thirteen Labs" />
+      <br />
+      <strong>Thirteen Labs</strong>
+    </td>
+    <td align="center" width="50%">
+      <img src="./obsidian-northern.png" width="180" alt="Obsidian Northern" />
+      <br />
+      <strong>Obsidian Northern</strong>
+    </td>
+  </tr>
+</table>
+
+</div>
 
 ---
 
