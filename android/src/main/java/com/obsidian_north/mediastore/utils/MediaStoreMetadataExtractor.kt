@@ -9,6 +9,11 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Locale
 
+@Deprecated(
+  message = "Use MetadataService + dedicated Audio/Video/Image extractors with Media3 Inspector. " +
+    "This monolithic extractor is kept for backward compat and will be removed in 4.0.",
+  replaceWith = ReplaceWith("com.obsidian_north.mediastore.metadata.MetadataService")
+)
 object MediaStoreMetadataExtractor {
 
   fun extract(mediaType: String, filePath: String, mimeType: String): Map<String, Any?> {

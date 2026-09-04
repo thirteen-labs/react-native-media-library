@@ -1,5 +1,34 @@
 # Changelog
 
+## 3.5.1 (2026-09-04)
+
+### Bug Fixes
+
+- **Gradle 9 / AGP 7.x compatibility** `android/build.gradle.kts:34`: removed unconditional `androidResources { isNonTransitiveRClass = true }` (introduced in AGP 8.3) that broke `moon-player` on Gradle 9.3.1 (`Unresolved reference 'isNonTransitiveRClass'`). Replaced with conditional comment; `consumerProguardFiles("consumer-rules.pro")` now added.
+- **Guava bloat** `android/build.gradle.kts:86`: `guava:33.4.8-android` → `listenablefuture:1.0` + `kotlinx-coroutines-guava` (Inspector only needs `ListenableFuture`), added `android/consumer-rules.pro` for R8 keeps.
+- **iOS private KVC** `ios/MediaStoreRepository.swift:11`: replaced `resource.value(forKey:"URL")` / `asset.value(forKey:"filename")` with public `PHAssetResource.originalFilename` + `PHContentEditingInput.fullSizeImageURL` async helper (`asyncAssetFileURL(for:)`) with sync KVC fallback for iOS 13-15 only; added `filename(for:)` helper. `ios/MediaStorePermissions.swift:5` now returns `{granted,status,limited}` handling `.limited` properly.
+- **Version sync** `package.json:3` / `android/build.gradle.kts:7` now single-sourced from `package.json` via runtime read; added `scripts/sync-version.js` and `npm run sync-version`.
+- **Docs** `README.md:195` corrected `API 21+` → `API 24+` (Media3 Inspector) and `iOS 16+ async` note; updated architecture diagram to `Media3InspectorExtractor`.
+- **Build hygiene** `android/.../utils/MediaStoreMetadataExtractor.kt:12` marked `@Deprecated` (use `MetadataService`); `Media3InspectorExtractor.kt:4` now logs enrichment timeouts/failures via `Log.w`.
+
+## 3.5.0 (2026-09-04)
+
+### New Features
+
+- **Android Media3 Inspector**: Added modern metadata extraction via `androidx.media3:media3-inspector:1.8.0` (`Media3InspectorExtractor`) as primary path for audio/video — replaces `MediaMetadataRetriever`/`MediaExtractor` with `MetadataRetriever` (`retrieveDurationUs`/`retrieveTrackGroups`) + `MediaExtractorCompat`/`FrameExtractor`. HDR-aware thumbnail pipeline (`Presentation` downscale, `setExtractHdrFrames`/`setEnableUltraHdr` on API34) in `MediaStoreModule.kt:536` with fallback to `ContentResolver.loadThumbnail`. `MetadataService.kt:15` now takes `Context` to enable enrichment; `MediaStoreRepository` wired to `MetadataService(context)`.
+- **iOS async AVFoundation**: Migrated `MediaStoreRepository.swift:971` to `AVAsyncProperty` (`await asset.load(.duration/.tracks/.naturalSize)`, `track.load(.formatDescriptions/.languageCode/.nominalFrameRate/.preferredTransform)`) behind `@available(iOS 16,*)`. Keeps sync legacy fallback for iOS 13-15. `MediaStoreModule.swift:163` and `getMetadata` now dispatch via `Task` on iOS 16+ to avoid blocking deprecations (`AVAsset-deprecated-symbols`).
+
+### Improvements
+
+- **ExifInterface 1.3.7 → 1.4.2** in `android/build.gradle.kts:69` (Dec 2025 stable, bugfixes).
+- **Version alignment**: `package.json:3` and `android/build.gradle.kts:7` bumped to `3.5.0` (`ios/RNMediaStore.podspec` reads from `package.json`).
+
+## 3.4.0 (2026-09-03)
+
+### Improvements
+
+- Audited latest metadata extraction APIs vs current package (no code changes) — documented Media3 Inspector vs Stagefright and iOS async `load(_:)` vs sync `asset.duration` deprecations.
+
 ## 3.3.1 (2026-08-25)
 
 ### Bug Fixes

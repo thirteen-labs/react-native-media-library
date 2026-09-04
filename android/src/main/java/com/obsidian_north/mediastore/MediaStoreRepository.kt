@@ -10,7 +10,7 @@ import com.obsidian_north.mediastore.utils.MimeUtils
 
 class MediaStoreRepository(private val context: Context) {
   private val contentResolver get() = context.contentResolver
-  val metadataService by lazy { MetadataService(contentResolver) }
+  val metadataService by lazy { MetadataService(context) }
 
   fun queryAudio(projection: Array<String>?, selection: String?, selectionArgs: Array<String>?, sortOrder: String?): Cursor? =
     contentResolver.query(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, projection, selection, selectionArgs, sortOrder)

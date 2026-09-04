@@ -14,6 +14,13 @@ import java.io.File
 
 class MetadataService(private val contentResolver: ContentResolver) {
 
+  // Optional context for Media3 Inspector enrichment (modern API). Set via secondary ctor.
+  private var appContext: android.content.Context? = null
+
+  constructor(context: android.content.Context) : this(context.contentResolver) {
+    appContext = context.applicationContext
+  }
+
   private val cache = MetadataCache()
   private var queue: MetadataQueue? = null
 
@@ -156,8 +163,38 @@ class MetadataService(private val contentResolver: ContentResolver) {
     }
 
     val rawResult = when (mediaType) {
-      "audio" -> AudioMetadataExtractor.extract(filePath, mimeType)
-      "video" -> VideoMetadataExtractor.extract(filePath, mimeType)
+      "audio" -> {
+        val legacy = AudioMetadataExtractor.extract(filePath, mimeType)
+        // Best-effort Media3 Inspector enrichment (replaces MediaMetadataRetriever/MediaExtractor).
+        // Supplements bitrate/sampleRate/channels/duration via TrackGroups + Timeline.
+        val enrichedMap = legacy.metadata.toMutableMap()
+        val warnings = legacy.warnings.toMutableList()
+        try {
+          appContext?.let { ctx ->
+            val uri = if (cacheUri.startsWith("content://")) Uri.parse(cacheUri) else Uri.fromFile(java.io.File(filePath))
+            Media3InspectorExtractor.enrichAudio(ctx, uri, enrichedMap, warnings)
+          }
+        } catch (_: Exception) {}
+        if (enrichedMap != legacy.metadata || warnings.size != legacy.warnings.size) {
+          val status = if (warnings.isNotEmpty()) ExtractionStatus.PARTIAL else legacy.status
+          MetadataExtractionResult(enrichedMap, status, warnings, legacy.errorCode)
+        } else legacy
+      }
+      "video" -> {
+        val legacy = VideoMetadataExtractor.extract(filePath, mimeType)
+        val enrichedMap = legacy.metadata.toMutableMap()
+        val warnings = legacy.warnings.toMutableList()
+        try {
+          appContext?.let { ctx ->
+            val uri = if (cacheUri.startsWith("content://")) Uri.parse(cacheUri) else Uri.fromFile(java.io.File(filePath))
+            Media3InspectorExtractor.enrichVideo(ctx, uri, enrichedMap, warnings)
+          }
+        } catch (_: Exception) {}
+        if (enrichedMap != legacy.metadata || warnings.size != legacy.warnings.size) {
+          val status = if (warnings.isNotEmpty()) ExtractionStatus.PARTIAL else legacy.status
+          MetadataExtractionResult(enrichedMap, status, warnings, legacy.errorCode)
+        } else legacy
+      }
       "image" -> ImageMetadataExtractor.extract(filePath, mimeType)
       else -> MetadataExtractionResult(
         metadata = mapOf("mediaType" to mediaType, "mimeType" to mimeType, "fileSize" to fileSize),

@@ -40,14 +40,13 @@ React Native Native Module
  │                                              ▼
  │                                         Cursor → Mapper → Domain Models → JSON
  │
- │                                         Metadata Subsystem
- │                                         ├── MetadataService (orchestrator)
- │                                         ├── MetadataCache (LRU + generation tracking)
- │                                         ├── MetadataQueue (bounded concurrent extraction)
- │                                         ├── AudioMetadataExtractor (MediaMetadataRetriever + MediaExtractor)
- │                                         ├── VideoMetadataExtractor (MediaExtractor + Retriever)
- │                                         ├── ImageMetadataExtractor (ExifInterface + BitmapFactory)
- │                                         └── MetadataNormalizer (unified schema)
+  │                                         Metadata Subsystem
+  │                                         ├── MetadataService (orchestrator + Media3 enrichment)
+  │                                         ├── MetadataCache (LRU + generation tracking)
+  │                                         ├── MetadataQueue (bounded concurrent extraction)
+  │                                         ├── Media3InspectorExtractor (MetadataRetriever + FrameExtractor + MediaExtractorCompat) + Audio/Video legacy fallback
+  │                                         ├── ImageMetadataExtractor (ExifInterface 1.4.2 + BitmapFactory)
+  │                                         └── MetadataNormalizer (unified schema)
  │
  └─── iOS ─────→ Photos Framework (PHAsset) ──→ PHImageManager / PHAssetFetchRequest
                                                   │
@@ -192,11 +191,10 @@ npm install @obsidian_north/react-native-mediastore
 ## Prerequisites
 
 - React Native 0.76+
-- **Android**: API 21+ (Android 5.0)
+- **Android**: API 24+ (Android 7.0) — required for Media3 Inspector (`media3-inspector:1.8.0`); `ExifInterface 1.4.2` also requires 24+
   - Android 13+ (API 33): granular media permissions are requested automatically
   - Android 12 and below: `READ_EXTERNAL_STORAGE` permission is required
-- **iOS**: iOS 13.0+
-  - Photos Framework permission is requested automatically via `PHPhotoLibrary.requestAuthorization`
+- **iOS**: iOS 13.0+ ( Photos Framework ), iOS 16+ uses fast async `AVAsyncProperty` path (`await asset.load(.duration/.tracks)`); iOS 13-15 falls back to sync legacy path
 
 ### Permissions Matrix
 

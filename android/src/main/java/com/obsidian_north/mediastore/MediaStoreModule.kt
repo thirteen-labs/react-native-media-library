@@ -538,13 +538,26 @@ class MediaStoreModule(reactContext: ReactApplicationContext) : ReactContextBase
       try {
         val contentUri = when (mediaType) { "video" -> Uri.withAppendedPath(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, mediaId); "image" -> Uri.withAppendedPath(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, mediaId); else -> return@withContext null }
         val targetWidth = width ?: 320; val targetHeight = height ?: 240
-        val bitmap = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-          context.contentResolver.loadThumbnail(contentUri, android.util.Size(targetWidth, targetHeight), CancellationSignal())
-        } else {
-          val idLong = mediaId.toLongOrNull() ?: return@withContext null
-          @Suppress("DEPRECATION")
-          when (mediaType) { "video" -> MediaStore.Video.Thumbnails.getThumbnail(context.contentResolver, idLong, MediaStore.Video.Thumbnails.MINI_KIND, null)
-            else -> MediaStore.Images.Thumbnails.getThumbnail(context.contentResolver, idLong, MediaStore.Images.Thumbnails.MINI_KIND, null) }
+
+        // 1) Try Media3 FrameExtractor (modern, HDR-aware, effect-driven downscale).
+        // Falls back to platform loadThumbnail if Media3 not present or fails.
+        var bitmap: Bitmap? = null
+        try {
+          bitmap = com.obsidian_north.mediastore.metadata.Media3InspectorExtractor.extractFrame(
+            context, contentUri, 0L, targetWidth, targetHeight
+          )
+        } catch (_: Exception) { bitmap = null }
+
+        // 2) Legacy platform path
+        if (bitmap == null) {
+          bitmap = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            context.contentResolver.loadThumbnail(contentUri, android.util.Size(targetWidth, targetHeight), CancellationSignal())
+          } else {
+            val idLong = mediaId.toLongOrNull() ?: return@withContext null
+            @Suppress("DEPRECATION")
+            when (mediaType) { "video" -> MediaStore.Video.Thumbnails.getThumbnail(context.contentResolver, idLong, MediaStore.Video.Thumbnails.MINI_KIND, null)
+              else -> MediaStore.Images.Thumbnails.getThumbnail(context.contentResolver, idLong, MediaStore.Images.Thumbnails.MINI_KIND, null) }
+          }
         }
         if (bitmap != null) {
           val thumbDir = File(context.cacheDir, "mediastore_thumbnails"); thumbDir.mkdirs()

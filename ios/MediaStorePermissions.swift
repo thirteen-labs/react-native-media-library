@@ -3,12 +3,14 @@ import Photos
 class MediaStorePermissions {
   func checkStatus() -> [String: Any?] {
     let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
-
+    let granted = status == .authorized || status == .limited
     return [
-      "granted": status == .authorized || status == .limited,
-      "audio": status == .authorized || status == .limited,
-      "video": status == .authorized || status == .limited,
-      "images": status == .authorized || status == .limited
+      "granted": granted,
+      "status": string(from: status),
+      "limited": status == .limited,
+      "audio": granted,
+      "video": granted,
+      "images": granted
     ]
   }
 
@@ -20,12 +22,26 @@ class MediaStorePermissions {
     }
 
     let status = await PHPhotoLibrary.requestAuthorization(for: .readWrite)
+    let granted = status == .authorized || status == .limited
 
     return [
-      "granted": status == .authorized || status == .limited,
-      "audio": status == .authorized || status == .limited,
-      "video": status == .authorized || status == .limited,
-      "images": status == .authorized || status == .limited
+      "granted": granted,
+      "status": string(from: status),
+      "limited": status == .limited,
+      "audio": granted,
+      "video": granted,
+      "images": granted
     ]
+  }
+
+  private func string(from status: PHAuthorizationStatus) -> String {
+    switch status {
+    case .authorized: return "authorized"
+    case .limited: return "limited"
+    case .denied: return "denied"
+    case .restricted: return "restricted"
+    case .notDetermined: return "notDetermined"
+    @unknown default: return "unknown"
+    }
   }
 }

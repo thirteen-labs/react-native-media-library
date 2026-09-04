@@ -1,11 +1,19 @@
 {
   "name": "@obsidian_north/react-native-mediastore",
-  "version": "3.4.0",
+  "version": "3.5.1",
   "description": "Universal high-performance media indexing library for Android (MediaStore) and iOS (Photos Framework)",
   "main": "build/index.js",
+  "module": "build/index.js",
   "types": "build/index.d.ts",
   "source": "src/index.ts",
   "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./build/index.d.ts",
+      "react-native": "./src/index.ts",
+      "default": "./build/index.js"
+    }
+  },
   "license": "MIT",
   "keywords": [
     "react-native",
@@ -28,6 +36,7 @@
     "url": "https://github.com/Northern-Obsidian/react-native-media-library/issues"
   },
   "author": "cadmus_labs",
+  "homepage": "https://github.com/Northern-Obsidian/react-native-media-library",
   "scripts": {
     "build": "tsc --project tsconfig.json",
     "clean": "rimraf build",
@@ -35,7 +44,8 @@
     "typecheck": "tsc --noEmit",
     "lint": "tsc --noEmit",
     "test": "jest",
-    "prepare": "npm run build"
+    "prepare": "npm run build",
+    "sync-version": "node scripts/sync-version.js"
   },
   "files": [
     "build",

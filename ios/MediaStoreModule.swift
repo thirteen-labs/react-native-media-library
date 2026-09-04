@@ -163,8 +163,16 @@ class MediaStoreModule: RCTEventEmitter {
   @objc
   func getDetailedMetadata(_ mediaType: String, id: String,
                            resolver resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
-    let repository = MediaStoreRepository()
-    resolve(repository.getDetailedMetadata(mediaType: mediaType, id: id))
+    if #available(iOS 16.0, *) {
+      Task {
+        let repository = MediaStoreRepository()
+        let result = await repository.getDetailedMetadataAsync(mediaType: mediaType, id: id)
+        resolve(result)
+      }
+    } else {
+      let repository = MediaStoreRepository()
+      resolve(repository.getDetailedMetadata(mediaType: mediaType, id: id))
+    }
   }
 
 @objc
@@ -335,55 +343,104 @@ class MediaStoreModule: RCTEventEmitter {
   @objc
   func getMetadata(_ uri: String, options: NSDictionary?,
                  resolver resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
-    let repository = MediaStoreRepository()
     let level = (options?["level"] as? String) ?? "full"
-    guard let detailed = repository.getDetailedMetadataByUri(uri: uri) else {
+    if #available(iOS 16.0, *) {
+      Task {
+        let repository = MediaStoreRepository()
+        guard let detailed = await repository.getDetailedMetadataByUriAsync(uri: uri) else {
+          resolve([
+            "metadata": [:] as [String: Any],
+            "status": "failed",
+            "warnings": ["File not found or unsupported"],
+            "errorCode": "FILE_NOT_FOUND"
+          ] as [String: Any])
+          return
+        }
+        var filtered = detailed
+        if level == "basic" {
+          let allowed: Set<String> = ["mediaType", "mimeType", "fileSize", "durationMs", "containerFormat"]
+          filtered = filtered.filter { allowed.contains($0.key) }
+        } else if level == "standard" {
+          var out: [String: Any?] = [:]
+          for key in ["mediaType", "mimeType", "fileSize", "durationMs", "containerFormat"] {
+            if let v = detailed[key] { out[key] = v }
+          }
+          if let audio = detailed["audio"] as? [String: Any?] {
+            let keep = ["title", "artist", "album", "albumArtist", "genre", "trackNumber", "discNumber", "year"]
+            var sa: [String: Any?] = [:]
+            for k in keep { if let v = audio[k] { sa[k] = v } }
+            if !sa.isEmpty { out["audio"] = sa }
+          }
+          if let video = detailed["video"] as? [String: Any?] {
+            let keep = ["width", "height", "rotation", "codec"]
+            var sv: [String: Any?] = [:]
+            for k in keep { if let v = video[k] { sv[k] = v } }
+            if !sv.isEmpty { out["video"] = sv }
+          }
+          if let image = detailed["image"] as? [String: Any?] {
+            let keep = ["width", "height", "format"]
+            var si: [String: Any?] = [:]
+            for k in keep { if let v = image[k] { si[k] = v } }
+            if !si.isEmpty { out["image"] = si }
+          }
+          if let artwork = detailed["artwork"] { out["artwork"] = artwork }
+          filtered = out
+        }
+        resolve([
+          "metadata": filtered,
+          "status": "complete",
+          "warnings": [] as [String],
+          "errorCode": NSNull()
+        ] as [String: Any])
+      }
+    } else {
+      let repository = MediaStoreRepository()
+      guard let detailed = repository.getDetailedMetadataByUri(uri: uri) else {
+        resolve([
+          "metadata": [:] as [String: Any],
+          "status": "failed",
+          "warnings": ["File not found or unsupported"],
+          "errorCode": "FILE_NOT_FOUND"
+        ] as [String: Any])
+        return
+      }
+      var filtered = detailed
+      if level == "basic" {
+        let allowed: Set<String> = ["mediaType", "mimeType", "fileSize", "durationMs", "containerFormat"]
+        filtered = filtered.filter { allowed.contains($0.key) }
+      } else if level == "standard" {
+        var out: [String: Any?] = [:]
+        for key in ["mediaType", "mimeType", "fileSize", "durationMs", "containerFormat"] {
+          if let v = detailed[key] { out[key] = v }
+        }
+        if let audio = detailed["audio"] as? [String: Any?] {
+          let keep = ["title", "artist", "album", "albumArtist", "genre", "trackNumber", "discNumber", "year"]
+          var sa: [String: Any?] = [:]
+          for k in keep { if let v = audio[k] { sa[k] = v } }
+          if !sa.isEmpty { out["audio"] = sa }
+        }
+        if let video = detailed["video"] as? [String: Any?] {
+          let keep = ["width", "height", "rotation", "codec"]
+          var sv: [String: Any?] = [:]
+          for k in keep { if let v = video[k] { sv[k] = v } }
+          if !sv.isEmpty { out["video"] = sv }
+        }
+        if let image = detailed["image"] as? [String: Any?] {
+          let keep = ["width", "height", "format"]
+          var si: [String: Any?] = [:]
+          for k in keep { if let v = image[k] { si[k] = v } }
+          if !si.isEmpty { out["image"] = si }
+        }
+        if let artwork = detailed["artwork"] { out["artwork"] = artwork }
+        filtered = out
+      }
       resolve([
-        "metadata": [:] as [String: Any],
-        "status": "failed",
-        "warnings": ["File not found or unsupported"],
-        "errorCode": "FILE_NOT_FOUND"
+        "metadata": filtered,
+        "status": "complete",
+        "warnings": [] as [String],
+        "errorCode": NSNull()
       ] as [String: Any])
-      return
     }
-    // Basic / standard level filtering mirrors Android's filterMetadata* logic
-    var filtered = detailed
-    if level == "basic" {
-      let allowed: Set<String> = ["mediaType", "mimeType", "fileSize", "durationMs", "containerFormat"]
-      filtered = filtered.filter { allowed.contains($0.key) }
-    } else if level == "standard" {
-      // Keep only top-level basics + limited sub-keys
-      var out: [String: Any?] = [:]
-      for key in ["mediaType", "mimeType", "fileSize", "durationMs", "containerFormat"] {
-        if let v = detailed[key] { out[key] = v }
-      }
-      if let audio = detailed["audio"] as? [String: Any?] {
-        let keep = ["title", "artist", "album", "albumArtist", "genre", "trackNumber", "discNumber", "year"]
-        var sa: [String: Any?] = [:]
-        for k in keep { if let v = audio[k] { sa[k] = v } }
-        if !sa.isEmpty { out["audio"] = sa }
-      }
-      if let video = detailed["video"] as? [String: Any?] {
-        let keep = ["width", "height", "rotation", "codec"]
-        var sv: [String: Any?] = [:]
-        for k in keep { if let v = video[k] { sv[k] = v } }
-        if !sv.isEmpty { out["video"] = sv }
-      }
-      if let image = detailed["image"] as? [String: Any?] {
-        let keep = ["width", "height", "format"]
-        var si: [String: Any?] = [:]
-        for k in keep { if let v = image[k] { si[k] = v } }
-        if !si.isEmpty { out["image"] = si }
-      }
-      if let artwork = detailed["artwork"] { out["artwork"] = artwork }
-      filtered = out
-    }
-    resolve([
-      "metadata": filtered,
-      "status": "complete",
-      "warnings": [] as [String],
-      "errorCode": NSNull()
-    ] as [String: Any])
   }
 
   @objc

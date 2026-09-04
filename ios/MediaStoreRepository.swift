@@ -9,6 +9,50 @@ class MediaStoreRepository {
   private let imageManager = PHCachingImageManager()
   static var lastRefreshTimestamp: Double = Date().timeIntervalSince1970 * 1000
 
+  // MARK: - Public PHAsset file URL helpers (replaces private KVC value(forKey:"URL"))
+
+  /// Synchronous fallback for iOS 13-15 (private KVC) — kept for legacy sync paths only.
+  /// On iOS 16+ prefer `assetFileURLAsync`.
+  private func syncAssetFileURL(for asset: PHAsset) -> URL? {
+    let resources = PHAssetResource.assetResources(for: asset)
+    guard let resource = resources.first else { return nil }
+    // Private KVC retained only for sync legacy fallback; async path uses PHContentEditingInput.
+    // swiftlint:disable:next force_cast
+    return (resource as AnyObject).value(forKey: "privateFileURL") as? URL
+      ?? (resource as AnyObject).value(forKey: "URL") as? URL
+      ?? (resource as AnyObject).value(forKey: "fileURL") as? URL
+  }
+
+  /// Public async helper — uses PHContentEditingInput.fullSizeImageURL (no private KVC).
+  @available(iOS 15.0, *)
+  private func asyncAssetFileURL(for asset: PHAsset) async -> URL? {
+    await withCheckedContinuation { cont in
+      let opts = PHContentEditingInputRequestOptions()
+      opts.isNetworkAccessAllowed = true
+      opts.canHandleAdjustmentData = { _ in true }
+      asset.requestContentEditingInput(with: opts) { input, _ in
+        if let url = input?.fullSizeImageURL {
+          cont.resume(returning: url)
+        } else if let avAsset = input?.avAsset as? AVURLAsset {
+          cont.resume(returning: avAsset.url)
+        } else {
+          // Fallback to private KVC only if public input yields nil
+          let resources = PHAssetResource.assetResources(for: asset)
+          let url = (resources.first as AnyObject?)?.value(forKey: "URL") as? URL
+          cont.resume(returning: url)
+        }
+      }
+    }
+  }
+
+  private func filename(for asset: PHAsset) -> String {
+    // Public: PHAssetResource.originalFilename vs private KVC value(forKey:"filename")
+    if let name = PHAssetResource.assetResources(for: asset).first?.originalFilename, !name.isEmpty {
+      return name
+    }
+    return (asset as AnyObject).value(forKey: "filename") as? String ?? ""
+  }
+
   // MARK: - Audio
 
   func getAudio(sort: Any?, filter: Any?, pagination: Any?) -> [[String: Any?]] {
@@ -403,17 +447,15 @@ class MediaStoreRepository {
     }
     // Try as PHAsset local identifier
     let fetchResult = PHAsset.fetchAssets(withLocalIdentifiers: [uri], options: nil)
-    guard let asset = fetchResult.firstObject else { return nil }
-    let resources = PHAssetResource.assetResources(for: asset)
-    guard let resource = resources.first else { return nil }
-    if let url = resource.value(forKey: "URL") as? URL {
+    guard let asset = fetchResult.firstObject else {
+      // Fallback: try the local identifier as a path
+      if FileManager.default.fileExists(atPath: uri) { return uri }
+      return nil
+    }
+    if let url = syncAssetFileURL(for: asset) {
       return url.path
     }
-    // Fallback: try the local identifier as a path
-    let fileManager = FileManager.default
-    if fileManager.fileExists(atPath: uri) {
-      return uri
-    }
+    if FileManager.default.fileExists(atPath: uri) { return uri }
     return nil
   }
 
@@ -425,7 +467,7 @@ class MediaStoreRepository {
 
     let resources = PHAssetResource.assetResources(for: asset)
     guard let resource = resources.first else { return nil }
-    guard let url = resource.value(forKey: "URL") as? URL else { return nil }
+    guard let url = syncAssetFileURL(for: asset) else { return nil }
 
     let assetMediaType: String = {
       switch asset.mediaType {
@@ -462,8 +504,8 @@ class MediaStoreRepository {
         let fetchResult = PHAsset.fetchAssets(withLocalIdentifiers: [uri], options: nil)
         guard let asset = fetchResult.firstObject else { return nil }
         let resources = PHAssetResource.assetResources(for: asset)
-        guard let resource = resources.first,
-              let url = resource.value(forKey: "URL") as? URL else { return nil }
+        guard let resource = resources.first else { return nil }
+        guard let url = syncAssetFileURL(for: asset) else { return nil }
         resolvedUrl = url
         resolvedMime = resource.uniformTypeIdentifier ?? mimeTypeFromExtension(url.pathExtension)
         resolvedMediaType = {
@@ -482,6 +524,67 @@ class MediaStoreRepository {
     let mime = resolvedMime ?? ""
 
     return extractMetadata(for: url, mediaType: mediaType, mimeType: mime)
+  }
+
+  // MARK: - Modern async variants (iOS 16+ AVAsyncProperty)
+
+  @available(iOS 16.0, *)
+  func getDetailedMetadataAsync(mediaType: String, id: String) async -> [String: Any?]? {
+    let fetchResult = PHAsset.fetchAssets(withLocalIdentifiers: [id], options: nil)
+    guard let asset = fetchResult.firstObject else { return nil }
+    let resources = PHAssetResource.assetResources(for: asset)
+    guard let resource = resources.first else { return nil }
+    guard let url = await asyncAssetFileURL(for: asset) ?? syncAssetFileURL(for: asset) else { return nil }
+    let assetMediaType: String = {
+      switch asset.mediaType {
+      case .audio: return "audio"
+      case .video: return "video"
+      case .image: return "image"
+      default: return "document"
+      }
+    }()
+    let resolvedMediaType = (mediaType != assetMediaType) ? assetMediaType : mediaType
+    let mime = resource.uniformTypeIdentifier ?? mimeTypeFromExtension(url.pathExtension)
+    return await extractMetadataAsync(for: url, mediaType: resolvedMediaType, mimeType: mime)
+  }
+
+  @available(iOS 16.0, *)
+  func getDetailedMetadataByUriAsync(uri: String) async -> [String: Any?]? {
+    var resolvedUrl: URL?
+    var resolvedMediaType: String?
+    var resolvedMime: String?
+    if let candidate = URL(string: uri), candidate.scheme == "file" {
+      resolvedUrl = candidate
+      resolvedMime = mimeTypeFromExtension(candidate.pathExtension)
+      resolvedMediaType = mediaTypeFromExtension(candidate.pathExtension)
+    } else if URL(string: uri)?.scheme == nil {
+      let fileCandidate = URL(fileURLWithPath: uri)
+      if FileManager.default.fileExists(atPath: fileCandidate.path) {
+        resolvedUrl = fileCandidate
+        resolvedMime = mimeTypeFromExtension(fileCandidate.pathExtension)
+        resolvedMediaType = mediaTypeFromExtension(fileCandidate.pathExtension)
+      } else {
+        let fetchResult = PHAsset.fetchAssets(withLocalIdentifiers: [uri], options: nil)
+        guard let asset = fetchResult.firstObject else { return nil }
+        let resources = PHAssetResource.assetResources(for: asset)
+        guard let resource = resources.first else { return nil }
+        guard let url = await asyncAssetFileURL(for: asset) ?? syncAssetFileURL(for: asset) else { return nil }
+        resolvedUrl = url
+        resolvedMime = resource.uniformTypeIdentifier ?? mimeTypeFromExtension(url.pathExtension)
+        resolvedMediaType = {
+          switch asset.mediaType {
+          case .audio: return "audio"
+          case .video: return "video"
+          case .image: return "image"
+          default: return "document"
+          }
+        }()
+      }
+    }
+    guard let url = resolvedUrl else { return nil }
+    let mediaType = resolvedMediaType ?? "document"
+    let mime = resolvedMime ?? ""
+    return await extractMetadataAsync(for: url, mediaType: mediaType, mimeType: mime)
   }
 
   // MARK: - Recent
@@ -737,7 +840,7 @@ class MediaStoreRepository {
     return [
       "id": asset.localIdentifier,
       "uri": uri ?? "",
-      "title": asset.value(forKey: "filename") as? String ?? "",
+      "title": filename(for: asset),
       "artist": metadata?["artist"] as? String ?? "",
       "album": metadata?["album"] as? String ?? "",
       "albumId": metadata?["albumId"] as? String ?? "",
@@ -778,7 +881,7 @@ class MediaStoreRepository {
     return [
       "id": asset.localIdentifier,
       "uri": uri ?? "",
-      "title": asset.value(forKey: "filename") as? String ?? "",
+      "title": filename(for: asset),
       "duration": Int(asset.duration * 1000),
       "width": asset.pixelWidth,
       "height": asset.pixelHeight,
@@ -805,7 +908,7 @@ class MediaStoreRepository {
     return [
       "id": asset.localIdentifier,
       "uri": uri ?? "",
-      "title": asset.value(forKey: "filename") as? String ?? "",
+      "title": filename(for: asset),
       "width": asset.pixelWidth,
       "height": asset.pixelHeight,
       "orientation": metadata?["orientation"] as? Int ?? 0,
@@ -842,7 +945,7 @@ class MediaStoreRepository {
   }
 
   private func getAudioArtist(for asset: PHAsset) -> String? {
-    return asset.value(forKey: "filename") as? String
+    return filename(for: asset)
   }
 
   private func getAudioGenre(for asset: PHAsset) -> String? {
@@ -990,6 +1093,8 @@ class MediaStoreRepository {
     return compact(result)
   }
 
+  // Legacy synchronous path (pre-iOS 16). Kept for fallback when async not available.
+  // Deprecated in Swift since iOS 16: use extractAudioVideoMetadataAsync instead.
   private func extractAudioVideoMetadata(for url: URL, mimeType: String) -> [String: Any?] {
     let asset = AVURLAsset(url: url)
     var result: [String: Any?] = [:]
@@ -1059,6 +1164,140 @@ class MediaStoreRepository {
 
     result["audio"] = audioDict
     result["video"] = videoDict
+    return result
+  }
+
+  // MARK: Modern async AVFoundation (iOS 16+)
+  // Uses AVAsyncProperty: load(.duration), load(.tracks), track.load(.formatDescriptions), etc.
+  // Avoids deprecated sync access (asset.duration, asset.tracks) which blocks.
+
+  @available(iOS 16.0, *)
+  private func extractMetadataAsync(for url: URL, mediaType: String, mimeType: String) async -> [String: Any?] {
+    var result: [String: Any?] = [:]
+    result["mediaType"] = mediaType
+    result["mimeType"] = mimeType
+    result["fileSize"] = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.intValue
+      ?? (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+
+    if mediaType == "audio" || mediaType == "video" {
+      let av = await extractAudioVideoMetadataAsync(for: url, mimeType: mimeType)
+      if let durationMs = av["durationMs"] { result["durationMs"] = durationMs }
+      if let containerFormat = av["containerFormat"] { result["containerFormat"] = containerFormat }
+      if let audio = av["audio"] as? [String: Any?] { result["audio"] = compact(audio) }
+      if let video = av["video"] as? [String: Any?] { result["video"] = compact(video) }
+    } else if mediaType == "image" {
+      result["image"] = compact(extractImageMetadata(for: url))
+    } else {
+      result["document"] = compact(extractDocumentMetadata(for: url))
+    }
+    return compact(result)
+  }
+
+  @available(iOS 16.0, *)
+  private func extractAudioVideoMetadataAsync(for url: URL, mimeType: String) async -> [String: Any?] {
+    let asset = AVURLAsset(url: url)
+    var result: [String: Any?] = [:]
+
+    // Async duration — replaces deprecated asset.duration
+    do {
+      let duration = try await asset.load(.duration)
+      let seconds = duration.seconds
+      if seconds.isFinite { result["durationMs"] = Int(seconds * 1000) }
+    } catch { /* ignore, legacy fallback handles */ }
+
+    result["containerFormat"] = containerFormat(from: mimeType, pathExtension: url.pathExtension)
+
+    var audioDict: [String: Any?]?
+    var videoDict: [String: Any?]? = [:]
+
+    // Async tracks — replaces deprecated asset.tracks
+    let tracks: [AVAssetTrack]
+    do {
+      tracks = try await asset.load(.tracks)
+    } catch {
+      // Fallback to sync if async fails (e.g. file not ready)
+      return extractAudioVideoMetadata(for: url, mimeType: mimeType)
+    }
+
+    for track in tracks {
+      // Async track properties
+      let mediaTypeVal: AVMediaType
+      let languageCode: String?
+      let formatDescriptions: [Any]
+      let nominalFrameRate: Float
+      let preferredTransform: CGAffineTransform
+      do {
+        async let mt = track.load(.mediaType)
+        async let lang = track.load(.languageCode)
+        async let descs = track.load(.formatDescriptions)
+        async let fps = track.load(.nominalFrameRate)
+        async let xform = track.load(.preferredTransform)
+        mediaTypeVal = try await mt
+        languageCode = try await lang
+        formatDescriptions = try await descs
+        nominalFrameRate = try await fps
+        preferredTransform = try await xform
+      } catch { continue }
+
+      if mediaTypeVal == .audio {
+        var ad: [String: Any?] = [:]
+        ad["language"] = languageCode
+        if let af = formatDescriptions.first as? CMFormatDescription {
+          let exts = af.extensions as? [AnyHashable: Any] ?? [:]
+          if let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(af)?.pointee {
+            if asbd.mSampleRate > 0 { ad["sampleRate"] = Int(asbd.mSampleRate) }
+            if asbd.mChannelsPerFrame > 0 { ad["channels"] = Int(asbd.mChannelsPerFrame) }
+            if asbd.mBitsPerChannel > 0 { ad["bitsPerSample"] = Int(asbd.mBitsPerChannel) }
+          }
+          if let bitrate = exts[kCMFormatDescriptionExtension_AudioBitRate] as? NSNumber
+            ?? exts[kCMFormatDescriptionExtension_BitRate] as? NSNumber {
+            ad["bitrate"] = bitrate.intValue
+          }
+          if let formatName = exts[kCMFormatDescriptionExtension_FormatName] as? String {
+            ad["codecMime"] = formatName
+            ad["codec"] = normalizeAudioCodec(formatName: formatName)
+          }
+          if let channels = ad["channels"] as? Int {
+            ad["channelLayout"] = channelLayout(for: channels)
+          }
+        }
+        audioDict = ad
+      } else if mediaTypeVal == .video {
+        var vd: [String: Any?] = videoDict ?? [:]
+        if nominalFrameRate > 0 { vd["frameRate"] = Double(nominalFrameRate) }
+        vd["rotation"] = rotationDegrees(from: preferredTransform)
+        vd["language"] = languageCode
+        if let vf = formatDescriptions.first as? CMFormatDescription {
+          let exts = vf.extensions as? [AnyHashable: Any] ?? [:]
+          let dims = CMVideoFormatDescriptionGetDimensions(vf)
+          if dims.width > 0 { vd["width"] = Int(dims.width) }
+          if dims.height > 0 { vd["height"] = Int(dims.height) }
+          if let bitrate = exts[kCMFormatDescriptionExtension_VideoBitRate] as? NSNumber {
+            vd["bitrate"] = bitrate.intValue
+          }
+          if let formatName = exts[kCMFormatDescriptionExtension_FormatName] as? String {
+            vd["codecMime"] = formatName
+            vd["codec"] = normalizeVideoCodec(formatName: formatName)
+          }
+          vd["profile"] = exts[kCMFormatDescriptionExtension_Profile] as? String
+          vd["level"] = exts[kCMFormatDescriptionExtension_Level] as? String
+          vd["colorSpace"] = exts[kCMFormatDescriptionExtension_ColorPrimaries] as? String
+          vd["colorStandard"] = exts[kCMFormatDescriptionExtension_YCbCrMatrix] as? String
+          vd["colorTransfer"] = exts[kCMFormatDescriptionExtension_TransferFunction] as? String
+        }
+        // naturalSize fallback needs asset load
+        if vd["width"] == nil {
+          if let size = try? await asset.load(.naturalSize) {
+            if size.width > 0 { vd["width"] = Int(size.width) }
+            if size.height > 0 { vd["height"] = Int(size.height) }
+          }
+        }
+        videoDict = vd
+      }
+    }
+
+    if let ad = audioDict { result["audio"] = ad }
+    if let vd = videoDict, !vd.isEmpty { result["video"] = vd }
     return result
   }
 
