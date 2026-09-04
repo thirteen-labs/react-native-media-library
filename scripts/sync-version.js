@@ -11,10 +11,19 @@ const version = pkg.version;
 const gradlePath = path.join(__dirname, '..', 'android', 'build.gradle.kts');
 if (fs.existsSync(gradlePath)) {
   let content = fs.readFileSync(gradlePath, 'utf8');
-  // build.gradle.kts now reads package.json dynamically, but keep comment in sync
+  // build.gradle.kts now reads package.json dynamically, but keep fallbacks in sync
+  let updated = false;
   if (content.includes('?: "')) {
     const newFallback = `?: "${version}"`;
-    content = content.replace(/\?: "[^"]+"/, newFallback);
+    const next = content.replace(/\?: "[^"]+"/g, newFallback);
+    if (next !== content) { content = next; updated = true; }
+  }
+  // also sync the `else "x.y.z"` fallback
+  if (content.includes('} else "')) {
+    const next2 = content.replace(/} else "[^"]+"/g, `} else "${version}"`);
+    if (next2 !== content) { content = next2; updated = true; }
+  }
+  if (updated) {
     fs.writeFileSync(gradlePath, content);
     console.log(`[sync-version] android/build.gradle.kts fallback -> ${version}`);
   }
