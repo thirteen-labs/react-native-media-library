@@ -1,5 +1,28 @@
 # Changelog
 
+## 3.5.4 (2026-09-05)
+
+### Bug Fixes
+
+- **Kotlin `mapOf` syntax** `android/.../MediaStoreModule.kt:733`: fixed `getDirectoryStatistics` using JS syntax `"key": value` inside `mapOf` — changed to `"key" to value` (`fileCount`, `totalSize`, `folderCount`, `histogram` + inner histogram). Failure was `Cannot infer type for this parameter` / `Argument type mismatch: Pair<K,V> expected` on `:obsidian_north_react-native-mediastore:compileReleaseKotlin` (Gradle 9.3.1, Kotlin 2.x).
+- **Version sync** `package.json:3` / `android/build.gradle.kts:12` now `3.5.4` via `npm run sync-version`
+
+## 3.5.3 (2026-09-04)
+
+### Bug Fixes
+
+- **Kotlin coroutine returns** `android/.../MediaStoreModule.kt:634`: removed explicit `return` inside `coroutineMethod {}` lambdas (`listFiles`, `recursiveList`, `fileLength`, `deleteFile`, `getDirectoryStatistics`) — labeled `return@coroutineMethod` required; bare `return` escaped `ReactMethod` and broke compilation / `Unit` inference
+- **Directory statistics accumulation** `android/.../MediaStoreModule.kt:730`: fixed pass-by-value bug where `recursiveStats(dir, fileCount, totalSize, folderCount, histogram)` never accumulated — primitives copied on each recursion, always returned zeros; replaced with `DirectoryStats` data class holding mutable state
+- **Null-safety** `android/.../MediaStoreRepository.kt:68`: `uri.authority.contains("media")` → `uri.authority?.contains("media") == true` to avoid NPE on non-media URIs; `repository.queryX` → `queryX` (class already is the repository) and `catch` now `return null` explicitly
+- **MimeUtils API** `android/.../MediaStoreModule.kt:780`: `MimeUtils.getMimeType(ext)` → `getMimeFromExtension(ext)` to match actual util signature; added missing `MimeUtils` + `CursorUtils` imports
+- **Version sync** `package.json:3` / `android/build.gradle.kts:12` now `3.5.3` via `npm run sync-version`
+
+## 3.5.2 (2026-09-04)
+
+### Chores
+
+- **Version bump only** `package.json:3` / `android/build.gradle.kts:12` `3.5.1` → `3.5.2`; `scripts/sync-version.js:11` now syncs both `?: "x.y.z"` and `} else "x.y.z"` fallbacks with global replace
+
 ## 3.5.1 (2026-09-04)
 
 ### Bug Fixes

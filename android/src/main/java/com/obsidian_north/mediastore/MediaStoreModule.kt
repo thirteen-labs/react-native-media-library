@@ -731,14 +731,14 @@ class MediaStoreModule(reactContext: ReactApplicationContext) : ReactContextBase
     coroutineMethod({
       val dir = File(dirPath)
       if (!dir.exists() || !dir.isDirectory) return@coroutineMethod mapOf(
-        "fileCount": 0, "totalSize": 0L, "folderCount": 0,
-        "histogram": mapOf("lessThan1MB": 0, "from1to10MB": 0, "from10to100MB": 0, "from100MBto1GB": 0, "greaterThan1GB": 0)
+        "fileCount" to 0, "totalSize" to 0L, "folderCount" to 0,
+        "histogram" to mapOf("lessThan1MB" to 0, "from1to10MB" to 0, "from10to100MB" to 0, "from100MBto1GB" to 0, "greaterThan1GB" to 0)
       )
       val stats = DirectoryStats()
       recursiveStats(dir, stats)
       mapOf(
-        "fileCount": stats.fileCount, "totalSize": stats.totalSize, "folderCount": stats.folderCount,
-        "histogram": stats.histogram
+        "fileCount" to stats.fileCount, "totalSize" to stats.totalSize, "folderCount" to stats.folderCount,
+        "histogram" to stats.histogram
       )
     }, promise)
   }
