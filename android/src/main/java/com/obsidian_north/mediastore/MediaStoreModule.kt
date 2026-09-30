@@ -515,9 +515,27 @@ class MediaStoreModule(reactContext: ReactApplicationContext) : ReactContextBase
         ReadableType.Boolean -> out[key] = map.getBoolean(key)
         ReadableType.Number -> out[key] = map.getDouble(key)
         ReadableType.String -> out[key] = map.getString(key)
-        ReadableType.Map -> out[key] = readableMapToMap(map.getMap(key)!!)
-        ReadableType.Array -> out[key] = null
+        ReadableType.Map -> out[key] = map.getMap(key)?.let { readableMapToMap(it) }
+        ReadableType.Array -> out[key] = readableArrayToList(map.getArray(key))
       }
+    }
+    return out
+  }
+
+  private fun readableArrayToList(array: ReadableArray?): List<Any?> {
+    if (array == null) return emptyList()
+    val out = mutableListOf<Any?>()
+    for (i in 0 until array.size()) {
+      out.add(
+        when (array.getType(i)) {
+          ReadableType.Null -> null
+          ReadableType.Boolean -> array.getBoolean(i)
+          ReadableType.Number -> array.getDouble(i)
+          ReadableType.String -> array.getString(i)
+          ReadableType.Map -> array.getMap(i)?.let { readableMapToMap(it) }
+          ReadableType.Array -> readableArrayToList(array.getArray(i))
+        }
+      )
     }
     return out
   }
