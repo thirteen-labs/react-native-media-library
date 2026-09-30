@@ -1603,7 +1603,7 @@ class MediaStoreRepository {
       }
       break
     }
-    let replayGain = readReplayGainHead(url: url)
+    let replayGain = readReplayGainTags(url: url)
     let artwork = extractArtworkFile(uri: uri, lightweight: true)
     // NOTE: no `as Any` on optionals — boxed nils bridge unreliably.
     // compact() strips nils; the TS normalizer maps missing keys to null.
@@ -1715,23 +1715,70 @@ class MediaStoreRepository {
     return syncAssetFileURL(for: asset)
   }
 
-  private func readReplayGainHead(url: URL) -> [String: Any?] {
-    guard let handle = try? FileHandle(forReadingFrom: url) else { return emptyGain() }
-    // FileHandle.read(upToCount:) / close() need iOS 13.4+; fall back on 13.0–13.3.
+  /// Scan a container for R128 / ReplayGain tags.
+  ///
+  /// The separator between a tag name and its value is not always `=`:
+  /// Vorbis comments use `KEY=value`, ID3v2 TXXX frames use
+  /// `KEY\0<encoding byte>value`, and MP4 freeform `----` atoms use
+  /// `KEY<4 flag bytes>value`. A `\s*=\s*` separator matched only the Vorbis
+  /// case, so MP3 and MP4 silently produced empty gain. The value is anchored to
+  /// a numeric shape so binary padding cannot be mistaken for a gain.
+  /// Mirrored in `ReplayGainReader.kt` and tested via `parseGainTagsFromHead`
+  /// in `src/audioMetadata.types.ts`.
+  private func readReplayGainTags(url: URL) -> [String: Any?] {
+    // MP4 keeps the `moov` atom -- and the freeform gain tags inside it -- at
+    // the end of the file as often as the start, so the tail is scanned too.
+    if let head = readLatin1(url: url, offset: 0, length: Self.replayGainHeadBytes) {
+      let parsed = parseGainTags(head)
+      if parsed["source"] as? String != nil { return parsed }
+    }
+    let total = Self.fileSize(url: url)
+    if total > Self.replayGainHeadBytes {
+      let tailLength = min(total, Self.replayGainTailBytes)
+      if let tail = readLatin1(url: url, offset: total - tailLength, length: tailLength) {
+        let parsed = parseGainTags(tail)
+        if parsed["source"] as? String != nil { return parsed }
+      }
+    }
+    return emptyGain()
+  }
+
+  private static let replayGainHeadBytes: Int = 2 * 1024 * 1024
+  private static let replayGainTailBytes: Int = 2 * 1024 * 1024
+
+  private static func fileSize(url: URL) -> Int64 {
+    let values = try? url.resourceValues(forKeys: [.fileSizeKey])
+    if let size = values?.fileSize { return Int64(size) }
+    let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
+    return (attrs?[.size] as? NSNumber)?.int64Value ?? 0
+  }
+
+  /// Read up to `length` bytes from `offset` as Latin-1 text.
+  private func readLatin1(url: URL, offset: Int64, length: Int) -> String? {
+    guard length > 0, let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+    // FileHandle.seek/read(upToCount:) / close() need iOS 13.4+; fall back on 13.0-13.3.
     defer {
       if #available(iOS 13.4, *) { try? handle.close() }
       else { handle.closeFile() }
     }
     let data: Data
     if #available(iOS 13.4, *) {
-      data = (try? handle.read(upToCount: 2 * 1024 * 1024)) ?? Data()
+      do {
+        try handle.seek(toOffset: UInt64(offset))
+        data = (try handle.read(upToCount: length)) ?? Data()
+      } catch { return nil }
     } else {
-      data = (try? handle.readData(ofLength: 2 * 1024 * 1024)) ?? Data()
+      handle.seek(toFileOffset: offset)
+      data = handle.readData(ofLength: length)
     }
-    guard !data.isEmpty, let head = String(data: data, encoding: .isoLatin1) else { return emptyGain() }
+    guard !data.isEmpty else { return nil }
+    return String(data: data, encoding: .isoLatin1)
+  }
+
+  private func parseGainTags(_ head: String) -> [String: Any?] {
     var r128Track: Double?; var r128Album: Double?; var rgTrack: Double?; var rgAlbum: Double?
     var trackPeak: Double?; var albumPeak: Double?
-    let pattern = "(?i)(R128_TRACK_GAIN|R128_ALBUM_GAIN|REPLAYGAIN_TRACK_GAIN|REPLAYGAIN_ALBUM_GAIN|REPLAYGAIN_TRACK_PEAK|REPLAYGAIN_ALBUM_PEAK)\\s*=\\s*([^\\r\\n;]{1,32})"
+    let pattern = "(?i)(R128_TRACK_GAIN|R128_ALBUM_GAIN|REPLAYGAIN_TRACK_GAIN|REPLAYGAIN_ALBUM_GAIN|REPLAYGAIN_TRACK_PEAK|REPLAYGAIN_ALBUM_PEAK)(?:[ \\t]*=[ \\t]*|[^\\x20-\\x7E]{0,8})([+-]?[0-9]+(?:\\.[0-9]+)?)"
     if let regex = try? NSRegularExpression(pattern: pattern) {
       let range = NSRange(head.startIndex..., in: head)
       for match in regex.matches(in: head, range: range) {
@@ -1739,7 +1786,7 @@ class MediaStoreRepository {
               let kRange = Range(match.range(at: 1), in: head),
               let vRange = Range(match.range(at: 2), in: head) else { continue }
         let key = String(head[kRange]).uppercased()
-        let raw = String(head[vRange]).trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+        let raw = String(head[vRange]).trimmingCharacters(in: .whitespacesAndNewlines)
         switch key {
         case "R128_TRACK_GAIN": if r128Track == nil { r128Track = r128ToDb(raw) }
         case "R128_ALBUM_GAIN": if r128Album == nil { r128Album = r128ToDb(raw) }

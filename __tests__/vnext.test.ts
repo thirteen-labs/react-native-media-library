@@ -1,5 +1,6 @@
 import {
   DEFAULT_ARTWORK_SAVE_OPTIONS,
+  parseGainTagsFromHead,
   parseReplayGainDb,
   parseReplayGainPeak,
   r128RawToDb,
@@ -111,6 +112,7 @@ describe("vNext shapes", () => {
 
   it("type-checks capabilities", () => {
     const caps: MediaStoreCapabilities = {
+      platform: "android",
       metadata: true,
       artwork: true,
       replayGain: true,
@@ -124,5 +126,71 @@ describe("vNext shapes", () => {
   it("defaults artwork save to format preservation", () => {
     expect(DEFAULT_ARTWORK_SAVE_OPTIONS.preserveFormat).toBe(true);
     expect(DEFAULT_ARTWORK_SAVE_OPTIONS.format).toBe("original");
+  });
+});
+
+/**
+ * Container-level tag scanning. The value-level parsers above were always
+ * covered; the separator logic between a tag name and its value was not, which
+ * is why MP3 and MP4 silently produced empty gain.
+ */
+describe("gain tag container scan (mirrors native ReplayGainReader)", () => {
+  const NO_GAIN = {
+    trackGain: null,
+    albumGain: null,
+    trackPeak: null,
+    albumPeak: null,
+    source: null,
+  };
+
+  it("reads Vorbis comments (FLAC / Ogg / Opus) via KEY=value", () => {
+    const flac = "fLaC\x00\x00\x00" + "R128_TRACK_GAIN=-512\x00REPLAYGAIN_TRACK_PEAK=0.988\x00";
+    const rg = parseGainTagsFromHead(flac);
+    expect(rg.trackGain).toBeCloseTo(-2); // Q8.8: -512 / 256
+    expect(rg.trackPeak).toBeCloseTo(0.988);
+    expect(rg.source).toBe("r128");
+  });
+
+  it("reads ID3v2 TXXX frames (KEY NUL encoding-byte value)", () => {
+    const mp3 = "ID3\x03\x00\x00" + "TXXXREPLAYGAIN_TRACK_GAIN\x00\x03-5.42 dB";
+    const rg = parseGainTagsFromHead(mp3);
+    expect(rg.trackGain).toBeCloseTo(-5.42);
+    expect(rg.source).toBe("replaygain");
+  });
+
+  it("reads MP4 freeform ---- atoms (KEY + 4 flag bytes + value)", () => {
+    const mp4 =
+      "\x00\x00\x00\x30----com.apple.iTunes\x00\x0d" +
+      "REPLAYGAIN_TRACK_GAIN\x00\x00\x00\x00-6.18 dB";
+    const rg = parseGainTagsFromHead(mp4);
+    expect(rg.trackGain).toBeCloseTo(-6.18);
+    expect(rg.source).toBe("replaygain");
+  });
+
+  it("keeps R128 priority when both tag families are present", () => {
+    const mixed =
+      "R128_TRACK_GAIN=-512\x00REPLAYGAIN_TRACK_GAIN=-5.42\x00" +
+      "R128_ALBUM_GAIN=-768\x00REPLAYGAIN_ALBUM_GAIN=-6.18\x00";
+    const rg = parseGainTagsFromHead(mixed);
+    expect(rg.trackGain).toBeCloseTo(-2);
+    expect(rg.albumGain).toBeCloseTo(-3);
+    expect(rg.source).toBe("r128");
+  });
+
+  it("returns empty gain for untagged media", () => {
+    expect(parseGainTagsFromHead("fLaC\x00\x00\x00\x22\x00\x00\x00TITLE\x08Something")).toEqual(NO_GAIN);
+  });
+
+  it("does not invent a gain from binary padding after a tag name", () => {
+    // Tag name present but the following bytes are not a number.
+    const garbage = "TXXXREPLAYGAIN_TRACK_GAIN\x00\x03\xff\xfe\xfd";
+    expect(parseGainTagsFromHead(garbage)).toEqual(NO_GAIN);
+  });
+
+  it("is stateless across repeated scans", () => {
+    const flac = "R128_TRACK_GAIN=-512\x00";
+    expect(parseGainTagsFromHead(flac).trackGain).toBeCloseTo(-2);
+    // A shared /g regex would carry lastIndex between calls without this.
+    expect(parseGainTagsFromHead(flac).trackGain).toBeCloseTo(-2);
   });
 });

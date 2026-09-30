@@ -27,68 +27,104 @@ object ReplayGainReader {
 
   private const val HEAD_BYTES_CONTENT_URI = 2 * 1024 * 1024L
   private const val HEAD_BYTES_FILE = 8 * 1024 * 1024L
+  private const val TAIL_BYTES_FILE = 2 * 1024 * 1024L
 
+  /**
+   * The separator between a tag name and its value is not always `=`:
+   * - Vorbis comments (FLAC / Ogg / Opus): `KEY=value`
+   * - ID3v2 TXXX frames:                   `KEY\0<encoding byte>value`
+   * - MP4 freeform `----` atoms:           `KEY<4 flag bytes>value`
+   *
+   * A `\s*=\s*` separator matched only the Vorbis case, so MP3 and MP4
+   * silently produced empty gain. Accept `=` or a short run of non-printable
+   * bytes, and anchor the value to a numeric shape so binary padding cannot be
+   * mistaken for a gain. Mirrored in `MediaStoreRepository.swift` and tested via
+   * `parseGainTagsFromHead` in `src/audioMetadata.types.ts`.
+   */
   private val GAIN_PATTERN = Regex(
-    "(?i)(R128_TRACK_GAIN|R128_ALBUM_GAIN|REPLAYGAIN_TRACK_GAIN|REPLAYGAIN_ALBUM_GAIN|REPLAYGAIN_TRACK_PEAK|REPLAYGAIN_ALBUM_PEAK)\\s*=\\s*([^\\u0000\\r\\n;]{1,32})"
+    "(?i)(R128_TRACK_GAIN|R128_ALBUM_GAIN|REPLAYGAIN_TRACK_GAIN|REPLAYGAIN_ALBUM_GAIN|REPLAYGAIN_TRACK_PEAK|REPLAYGAIN_ALBUM_PEAK)" +
+      "(?:[ \\t]*=[ \\t]*|[^\\x20-\\x7E]{0,8})" +
+      "([+-]?[0-9]+(?:\\.[0-9]+)?)"
   )
 
   fun read(context: Context, uriString: String): Map<String, Any?> {
-    val head = readHead(context, uriString) ?: return emptyGain()
+    // Real files are scanned head *and* tail: an MP4 `moov` atom -- which holds
+    // the `----:com.apple.iTunes:REPLAYGAIN_*` freeform tags -- is commonly at
+    // the end of the file, past any head-only window.
+    if (!uriString.startsWith("content://")) {
+      val file = File(uriString.removePrefix("file://"))
+      if (file.exists() && file.canRead()) return readFile(file)
+    }
+    val head = readHeadFromUri(context, uriString) ?: return emptyGain()
     return parse(head)
   }
 
   fun readFile(file: File): Map<String, Any?> {
     if (!file.exists() || !file.canRead()) return emptyGain()
     return try {
-      val len = minOf(file.length(), HEAD_BYTES_FILE).toInt()
-      if (len <= 0) return emptyGain()
-      val buf = ByteArray(len)
-      file.inputStream().use { input ->
-        var off = 0
-        while (off < len) {
-          val n = input.read(buf, off, len - off)
-          if (n <= 0) break
-          off += n
+      val head = readRange(file, 0L, minOf(file.length(), HEAD_BYTES_FILE)) ?: return emptyGain()
+      val parsed = parse(String(head, Charsets.ISO_8859_1))
+      if (parsed["source"] != null) return parsed
+      // Nothing in the head -- try the tail for trailing `moov` atoms.
+      val total = file.length()
+      if (total > HEAD_BYTES_FILE) {
+        val tailLen = minOf(total, TAIL_BYTES_FILE)
+        val tail = readRange(file, total - tailLen, tailLen)
+        if (tail != null) {
+          val tailParsed = parse(String(tail, Charsets.ISO_8859_1))
+          if (tailParsed["source"] != null) return tailParsed
         }
       }
-      parse(String(buf, Charsets.ISO_8859_1))
+      parsed
     } catch (_: Exception) {
       emptyGain()
     }
   }
 
-  private fun readHead(context: Context, uriString: String): String? {
+  private fun readRange(file: File, offset: Long, length: Long): ByteArray? {
+    if (length <= 0) return null
+    val len = length.toInt()
+    val buf = ByteArray(len)
+    file.inputStream().use { input ->
+      // skip() may advance fewer bytes than asked, so loop until positioned.
+      var skipped = 0L
+      while (skipped < offset) {
+        val s = input.skip(offset - skipped)
+        if (s <= 0) break
+        skipped += s
+      }
+      if (skipped < offset) return null
+      var off = 0
+      while (off < len) {
+        val n = input.read(buf, off, len - off)
+        if (n <= 0) break
+        off += n
+      }
+      if (off == 0) return null
+      return if (off == len) buf else buf.copyOf(off)
+    }
+  }
+
+  private fun readHeadFromUri(context: Context, uriString: String): String? {
     return try {
-      if (uriString.startsWith("content://")) {
-        val uri = Uri.parse(uriString)
-        context.contentResolver.openInputStream(uri)?.use { input ->
+      val bytes = if (uriString.startsWith("content://")) {
+        context.contentResolver.openInputStream(Uri.parse(uriString))?.use { input ->
           readHeadFromStream(input, HEAD_BYTES_CONTENT_URI)
-        }?.let { String(it, Charsets.ISO_8859_1) }
+        }
       } else {
-        val path = uriString.removePrefix("file://")
-        val file = File(path)
+        val file = File(uriString.removePrefix("file://"))
         if (file.exists() && file.canRead()) {
-          val len = minOf(file.length(), HEAD_BYTES_FILE).toInt()
-          if (len <= 0) return null
-          val buf = ByteArray(len)
-          file.inputStream().use { input ->
-            var off = 0
-            while (off < len) {
-              val n = input.read(buf, off, len - off)
-              if (n <= 0) break
-              off += n
-            }
-          }
-          String(buf, Charsets.ISO_8859_1)
+          readRange(file, 0L, minOf(file.length(), HEAD_BYTES_FILE))
         } else {
           // Fall back to resolving as a generic Uri (file provider, etc.)
           try {
             context.contentResolver.openInputStream(Uri.parse(uriString))?.use { input ->
               readHeadFromStream(input, HEAD_BYTES_CONTENT_URI)
-            }?.let { String(it, Charsets.ISO_8859_1) }
+            }
           } catch (_: Exception) { null }
         }
       }
+      bytes?.let { String(it, Charsets.ISO_8859_1) }
     } catch (_: Exception) { null }
   }
 
@@ -114,7 +150,8 @@ object ReplayGainReader {
 
     for (match in GAIN_PATTERN.findAll(headLatin1)) {
       val key = match.groupValues[1].uppercase()
-      val raw = match.groupValues[2].trim().trim('\u0000', '"', '\'')
+      // The pattern anchors on a numeric shape, so the capture needs no trimming.
+      val raw = match.groupValues[2]
       when (key) {
         "R128_TRACK_GAIN" -> if (r128Track == null) R128Parser.r128RawToDb(raw)?.let { r128Track = it }
         "R128_ALBUM_GAIN" -> if (r128Album == null) R128Parser.r128RawToDb(raw)?.let { r128Album = it }

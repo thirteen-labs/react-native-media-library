@@ -60,11 +60,14 @@ export interface ArtworkSaveOptions {
 }
 
 export interface MediaStoreCapabilities {
+  /** "android" (MediaStore) or "ios" (Photos Framework). */
+  platform: "android" | "ios";
   metadata: boolean;
   artwork: boolean;
   replayGain: boolean;
   r128: boolean;
   batchMetadata: boolean;
+  /** True only where the backing store is Android MediaStore. */
   mediaStore: boolean;
 }
 
@@ -140,4 +143,76 @@ export function parseReplayGainPeak(raw: string | number | null | undefined): nu
   if (typeof raw === "number") return raw >= 0 && Number.isFinite(raw) ? raw : null;
   const value = Number(raw.trim());
   return Number.isFinite(value) && value >= 0 ? value : null;
+}
+
+/**
+ * Reference implementation of the native container tag scan in
+ * `ReplayGainReader.kt` and `MediaStoreRepository.swift`.
+ *
+ * KEEP IN SYNC with both native implementations. It lives here so the
+ * separator logic is unit-testable without a device.
+ *
+ * The separator between a tag name and its value is not always `=`:
+ * - Vorbis comments (FLAC / Ogg / Opus): `KEY=value`
+ * - ID3v2 TXXX frames:                   `KEY\0<encoding byte>value`
+ * - MP4 freeform `----` atoms:           `KEY<4 flag bytes>value`
+ *
+ * A single `\s*=\s*` therefore matched only the Vorbis case and silently
+ * returned empty gain for MP3 and MP4. The alternation below accepts `=` or a
+ * short run of non-printable bytes, and the value is anchored to a numeric
+ * shape so binary padding cannot be mistaken for a gain.
+ */
+const GAIN_TAG_PATTERN =
+  /(R128_TRACK_GAIN|R128_ALBUM_GAIN|REPLAYGAIN_TRACK_GAIN|REPLAYGAIN_ALBUM_GAIN|REPLAYGAIN_TRACK_PEAK|REPLAYGAIN_ALBUM_PEAK)(?:[ \t]*=[ \t]*|[^\x20-\x7E]{0,8})([+-]?[0-9]+(?:\.[0-9]+)?)/gi;
+
+/**
+ * Extract R128 / ReplayGain tags from a Latin-1 decoded container head or tail.
+ * R128 wins over ReplayGain 1.0 when both are present.
+ */
+export function parseGainTagsFromHead(head: string): MediaStoreReplayGain {
+  let r128Track: number | null = null;
+  let r128Album: number | null = null;
+  let rgTrack: number | null = null;
+  let rgAlbum: number | null = null;
+  let trackPeak: number | null = null;
+  let albumPeak: number | null = null;
+
+  GAIN_TAG_PATTERN.lastIndex = 0;
+  for (const match of head.matchAll(GAIN_TAG_PATTERN)) {
+    const key = match[1].toUpperCase();
+    const raw = match[2];
+    switch (key) {
+      case "R128_TRACK_GAIN":
+        r128Track ??= r128RawToDb(raw);
+        break;
+      case "R128_ALBUM_GAIN":
+        r128Album ??= r128RawToDb(raw);
+        break;
+      case "REPLAYGAIN_TRACK_GAIN":
+        rgTrack ??= parseReplayGainDb(raw);
+        break;
+      case "REPLAYGAIN_ALBUM_GAIN":
+        rgAlbum ??= parseReplayGainDb(raw);
+        break;
+      case "REPLAYGAIN_TRACK_PEAK":
+        trackPeak ??= parseReplayGainPeak(raw);
+        break;
+      case "REPLAYGAIN_ALBUM_PEAK":
+        albumPeak ??= parseReplayGainPeak(raw);
+        break;
+    }
+  }
+
+  const hasR128 = r128Track !== null || r128Album !== null;
+  const hasRg = rgTrack !== null || rgAlbum !== null || trackPeak !== null || albumPeak !== null;
+  if (!hasR128 && !hasRg) {
+    return { trackGain: null, albumGain: null, trackPeak: null, albumPeak: null, source: null };
+  }
+  return {
+    trackGain: r128Track ?? rgTrack,
+    albumGain: r128Album ?? rgAlbum,
+    trackPeak,
+    albumPeak,
+    source: hasR128 ? "r128" : "replaygain",
+  };
 }
