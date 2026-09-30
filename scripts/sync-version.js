@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-// Syncs version from package.json into Android build.gradle.kts and podspec is dynamic.
+// Syncs version from package.json into Android build.gradle.kts, the npm
+// lockfile, and podspec (which is dynamic).
 // Usage: npm run sync-version  (also runs on preversion)
 const fs = require('fs');
 const path = require('path');
@@ -28,4 +29,25 @@ if (fs.existsSync(gradlePath)) {
     console.log(`[sync-version] android/build.gradle.kts fallback -> ${version}`);
   }
 }
+
+// Keep package-lock.json's own version fields in step with package.json.
+// npm only rewrites these on install/publish, so a manual `npm version` plus a
+// fresh `npm i` could otherwise leave the lockfile advertising a stale version
+// (this is what drifted the lockfile to 3.5.3 while package.json read 3.5.4).
+const lockPath = path.join(__dirname, '..', 'package-lock.json');
+if (fs.existsSync(lockPath)) {
+  const lock = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+  const changed = [];
+  if (lock.version !== version) { changed.push(`version ${lock.version} -> ${version}`); lock.version = version; }
+  const root = lock.packages && lock.packages[''];
+  if (root && root.version !== version) {
+    changed.push(`packages[""].version ${root.version} -> ${version}`);
+    root.version = version;
+  }
+  if (changed.length > 0) {
+    fs.writeFileSync(lockPath, JSON.stringify(lock, null, 2) + '\n');
+    console.log(`[sync-version] package-lock.json ${changed.join(', ')}`);
+  }
+}
+
 console.log(`[sync-version] package.json version is ${version} (android reads dynamically, ios podspec reads package.json)`);
