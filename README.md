@@ -510,7 +510,7 @@ while your audio engine owns **"how should I play it?"** (preamp, EQ, DSP).
 | `getAudioMetadataBatch(uris)` | `(MediaStoreAudioMetadata \| null)[]` | One bridge hop for library scans (artwork is availability-only in batch) |
 | `extractArtwork(audioUri)` | `MediaStoreArtwork \| null` | Embedded artwork → cache file usable by `<Image>` |
 | `saveArtwork(sourceUri, destUri?, options?)` | `MediaStoreArtwork \| null` | Persist artwork; `{ preserveFormat: true }` by default |
-| `getCapabilities()` | `MediaStoreCapabilities` | `{ metadata, artwork, replayGain, r128, batchMetadata, mediaStore }` |
+| `getCapabilities()` | `MediaStoreCapabilities` | `{ platform, metadata, artwork, replayGain, r128, batchMetadata, mediaStore, photosLibrary }` |
 | `getPlaybackGainDb(uri, mode?, preampDb?)` | `number` | Effective playback gain without silent track/album mixing |
 
 ```typescript
@@ -541,6 +541,14 @@ if (!(await getCapabilities()).r128) { /* fall back */ }
 Gain resolution hierarchy: R128 track gain → ReplayGain track gain → album gain (only when
 `mode === "album"`) → preamp → `0 dB`. R128 integers are Q8.8 (`256 = 1 dB`) and are normalized
 to dB floats in native code, so JS never parses raw tag encodings.
+
+```typescript
+const caps = await getCapabilities();
+caps.platform;       // "android" | "ios"  <- use this
+caps.photosLibrary;  // true only on iOS   <- iOS-specific check
+// caps.mediaStore is deprecated. It stays `true` on both platforms so existing
+// gates keep working, so it cannot tell you the backing store. Use `platform`.
+```
 
 ```typescript
 interface MediaStoreAudioMetadata {

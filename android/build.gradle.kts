@@ -9,8 +9,8 @@ group = "com.obsidian_north"
 version = run {
     val pkg = rootProject.file("../package.json").let { if (it.exists()) it else file("../package.json") }
     if (pkg.exists()) {
-        Regex(""""version"\s*:\s*"([^"]+)"""").find(pkg.readText())?.groupValues?.get(1) ?: "3.6.0"
-    } else "3.6.0"
+        Regex(""""version"\s*:\s*"([^"]+)"""").find(pkg.readText())?.groupValues?.get(1) ?: "3.6.1"
+    } else "3.6.1"
 }
 
 android {

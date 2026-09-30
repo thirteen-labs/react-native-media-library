@@ -1,13 +1,26 @@
 # Changelog
 
+## 3.6.1 (2026-09-30)
+
+### Bug Fixes
+
+- **R128 / ReplayGain was never read from MP3 or MP4.** The tag scan matched `KEY<spaces>=<spaces>VALUE`, but only Vorbis comments (FLAC / Ogg / Opus) use `=`. ID3v2 TXXX frames separate the tag from its value with a NUL plus an encoding byte, and MP4 freeform `----` atoms with a 4-byte flags field, so both silently returned an empty gain. The 3.6.0 claim of MP4/ID3v2 coverage was incorrect. The pattern now accepts `=` **or** a short run of non-printable bytes, and anchors the value to a numeric shape so binary padding cannot be read as a gain. FLAC/Ogg/Opus behaviour is unchanged.
+- **MP4 `moov` atoms are frequently at the end of a file**, past the 2–8 MB head window. Files are now scanned head **and** tail, so gain tags in a trailing `moov` are reachable.
+- **`getCapabilities()` could not identify the backing store.** It reported `mediaStore: true` on iOS, which reads as "is this MediaStore-backed?" — false there, since iOS reads through the Photos Framework. Correcting that value outright would break callers who use it as "does this platform index the media library" and gate on it, so instead: `platform: "android" | "ios"` and `photosLibrary` were added as accurate signals, and `mediaStore` is now **deprecated** but kept `true` on both platforms so nothing breaks. `platform` and `photosLibrary` are optional, so consumer code written against 3.6.0 keeps compiling unchanged.
+- **`readableMapToMap` dropped array-valued bridge options** (`ReadableType.Array` mapped to `null`), losing data silently. Arrays are now converted recursively, and the object branch no longer uses `!!`.
+
+### Internal
+
+- Added `parseGainTagsFromHead` to `src/audioMetadata.types.ts` as a tested reference implementation of the native container scan, with 7 tests covering FLAC/Vorbis, ID3v2, MP4 freeform, tag-family priority, untagged media, and binary-padding rejection. The TypeScript, Kotlin and Swift patterns were verified to produce identical results across all fixtures.
+
 ## 3.6.0 (2026-09-06)
 
 ### New Features — Native Metadata & Artwork Engine (replaces `@missingcore`)
 
 - **Unified audio metadata** `getAudioMetadata(uri)` / `getAudioMetadataBatch(uris)`: single `MediaStoreAudioMetadata` with standard tags, technical fields, `artwork`, and normalized `replayGain`. Batch keeps artwork lightweight (availability only) for library scans.
-- **R128 + ReplayGain 1.0** (`metadata/audio/R128Parser.kt`, `ReplayGainReader.kt`): dependency-free head-scan for `R128_*_GAIN` / `REPLAYGAIN_*` across FLAC/Vorbis/Opus comments, ID3v2 TXXX, and MP4 freeform atoms. R128 Q8.8 (`256 = 1 dB`) normalized natively; `source: "r128" | "replaygain"` with R128 priority. iOS mirrors via `readReplayGainHead` in `MediaStoreRepository.swift`.
+- **R128 + ReplayGain 1.0** (`metadata/audio/R128Parser.kt`, `ReplayGainReader.kt`): dependency-free head-scan for `R128_*_GAIN` / `REPLAYGAIN_*` across FLAC/Vorbis/Opus comments, ID3v2 TXXX, and MP4 freeform atoms. R128 Q8.8 (`256 = 1 dB`) normalized natively; `source: "r128" | "replaygain"` with R128 priority. iOS mirrors via `readReplayGainTags` in `MediaStoreRepository.swift`. (MP4/ID3v2 coverage was broken until 3.6.1 — see above.)
 - **Artwork engine** (`artwork/ArtworkExtractor.kt`, `ArtworkSaver.kt`): `extractArtwork(uri)` (embedded → cache file with mime/dimensions/size) and `saveArtwork(source, dest?, options?)` with `{ preserveFormat: true }` default — no lossy JPEG 0.85 recompression unless `{ format: "jpeg", quality }` requested.
-- **Capabilities** `getCapabilities()`: `{ metadata, artwork, replayGain, r128, batchMetadata, mediaStore }` so Lumora never assumes per-platform support.
+- **Capabilities** `getCapabilities()`: `{ metadata, artwork, replayGain, r128, batchMetadata, mediaStore }` so Lumora never assumes per-platform support. (It could not actually identify the backing store — `platform` and `photosLibrary` arrive in 3.6.1 — see above.)
 - **TS helpers** (`src/audioMetadata.types.ts`): `r128RawToDb`, `parseReplayGainDb/Peak`, `resolveReplayGainDb(metadata, mode, preamp)` implementing the track/album/off hierarchy, plus `getPlaybackGainDb(uri, mode, preamp)`.
 
 ## 3.5.4 (2026-09-05)

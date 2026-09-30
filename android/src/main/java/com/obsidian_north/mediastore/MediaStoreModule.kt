@@ -495,13 +495,24 @@ class MediaStoreModule(reactContext: ReactApplicationContext) : ReactContextBase
 
   @ReactMethod
   fun getCapabilities(promise: Promise) {
+    // These are compile-time guarantees on Android: UnifiedAudioMetadataReader,
+    // ArtworkExtractor/ArtworkSaver and ReplayGainReader/R128Parser are all
+    // statically linked below, so a false here would mean the build is broken.
+    // Runtime detection is deliberately not faked -- per-file failures (e.g. a
+    // container whose gain tags cannot be parsed) surface as an empty
+    // MediaStoreReplayGain with source == null, not as a missing capability.
     promise.resolve(Arguments.makeNativeMap(mapOf(
+      "platform" to "android",
       "metadata" to true,
       "artwork" to true,
       "replayGain" to true,
       "r128" to true,
       "batchMetadata" to true,
+      // Deprecated: kept `true` on both platforms so existing gates do not
+      // break. Android is genuinely MediaStore-backed, but iOS reports `true`
+      // here too for compatibility -- use `platform` / `photosLibrary`.
       "mediaStore" to true,
+      "photosLibrary" to false,
     )))
   }
 

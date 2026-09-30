@@ -60,15 +60,28 @@ export interface ArtworkSaveOptions {
 }
 
 export interface MediaStoreCapabilities {
-  /** "android" (MediaStore) or "ios" (Photos Framework). */
-  platform: "android" | "ios";
+  /**
+   * "android" (MediaStore) or "ios" (Photos Framework).
+   *
+   * Optional so consumers written against 3.6.0 and earlier keep compiling.
+   * The native modules always populate it.
+   */
+  platform?: "android" | "ios";
   metadata: boolean;
   artwork: boolean;
   replayGain: boolean;
   r128: boolean;
   batchMetadata: boolean;
-  /** True only where the backing store is Android MediaStore. */
+  /**
+   * @deprecated The name reads as "is this MediaStore-backed?", which is false
+   * on iOS, but existing callers use it as "does this platform index the media
+   * library" and gate on it. It is therefore kept as `true` on both platforms
+   * so nothing breaks. Do not use it to detect the backing store -- use
+   * `platform`, or `photosLibrary` for the iOS check specifically.
+   */
   mediaStore: boolean;
+  /** True only where the backing store is the iOS Photos Framework. */
+  photosLibrary?: boolean;
 }
 
 export const DEFAULT_ARTWORK_SAVE_OPTIONS: Required<ArtworkSaveOptions> = {

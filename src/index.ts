@@ -1,5 +1,5 @@
 import React from "react";
-import { NativeEventEmitter } from "react-native";
+import { NativeEventEmitter, Platform } from "react-native";
 import NativeModule from "./MediaStoreModule";
 import type {
   AudioItem,
@@ -68,6 +68,7 @@ import type {
 } from "./audioMetadata.types";
 import {
   DEFAULT_ARTWORK_SAVE_OPTIONS,
+  parseGainTagsFromHead,
   parseReplayGainDb,
   parseReplayGainPeak,
   r128RawToDb,
@@ -142,6 +143,7 @@ export type {
 
 export {
   DEFAULT_ARTWORK_SAVE_OPTIONS,
+  parseGainTagsFromHead,
   parseReplayGainDb,
   parseReplayGainPeak,
   r128RawToDb,
@@ -325,12 +327,14 @@ export async function inspectMetadata(
 // ---------------------------------------------------------------------------
 
 const VNEXT_CAPABILITIES_FALLBACK: MediaStoreCapabilities = {
+  platform: Platform.OS === "ios" ? "ios" : "android",
   metadata: true,
   artwork: false,
   replayGain: false,
   r128: false,
   batchMetadata: false,
   mediaStore: true,
+  photosLibrary: Platform.OS === "ios",
 };
 
 function normalizeAudioMetadata(value: unknown, uri: string): MediaStoreAudioMetadata | null {
@@ -512,13 +516,20 @@ export async function getCapabilities(): Promise<MediaStoreCapabilities> {
   if (typeof fn !== "function") return { ...VNEXT_CAPABILITIES_FALLBACK };
   try {
     const caps = (await fn.call(NativeModule)) as Partial<MediaStoreCapabilities>;
+    const platform = caps.platform ?? (Platform.OS === "ios" ? "ios" : "android");
     return {
+      platform,
       metadata: caps.metadata ?? true,
       artwork: caps.artwork ?? false,
       replayGain: caps.replayGain ?? false,
       r128: caps.r128 ?? false,
       batchMetadata: caps.batchMetadata ?? false,
+      // Intentionally `true` on both platforms. See the deprecation note on
+      // MediaStoreCapabilities.mediaStore -- flipping this to false on iOS
+      // would break callers that gate on it. `photosLibrary` is the accurate
+      // iOS signal, and `platform` is the general one.
       mediaStore: caps.mediaStore ?? true,
+      photosLibrary: caps.photosLibrary ?? platform === "ios",
     };
   } catch (_e) {
     return { ...VNEXT_CAPABILITIES_FALLBACK };

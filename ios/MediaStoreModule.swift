@@ -544,12 +544,18 @@ class MediaStoreModule: RCTEventEmitter {
   @objc
   func getCapabilities(_ resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
     resolve([
+      "platform": "ios",
       "metadata": true,
       "artwork": true,
       "replayGain": true,
       "r128": true,
       "batchMetadata": true,
+      // Deprecated: reads as "is this MediaStore-backed?", which is false here,
+      // but existing callers gate on it as "does this platform index the media
+      // library". Kept `true` so nothing breaks. Use `platform` (or
+      // `photosLibrary`) to detect the backing store.
       "mediaStore": true,
+      "photosLibrary": true,
     ] as [String: Any])
   }
 

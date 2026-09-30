@@ -119,8 +119,45 @@ describe("vNext shapes", () => {
       r128: true,
       batchMetadata: true,
       mediaStore: true,
+      photosLibrary: false,
     };
     expect(caps.r128).toBe(true);
+  });
+
+  it("keeps the pre-3.6.1 capability shape assignable", () => {
+    // Consumers written against 3.6.0 must keep compiling: `platform` and
+    // `photosLibrary` are both optional, and `mediaStore` is still required
+    // and still means what it meant before.
+    const legacy: MediaStoreCapabilities = {
+      metadata: true,
+      artwork: true,
+      replayGain: true,
+      r128: true,
+      batchMetadata: true,
+      mediaStore: true,
+    };
+    expect(legacy.mediaStore).toBe(true);
+    expect(legacy.platform).toBeUndefined();
+    expect(legacy.photosLibrary).toBeUndefined();
+  });
+
+  it("distinguishes the backing store without changing mediaStore", () => {
+    // mediaStore stays `true` on both platforms for backward compatibility;
+    // photosLibrary is the accurate iOS signal.
+    const ios: MediaStoreCapabilities = {
+      platform: "ios",
+      metadata: true,
+      artwork: true,
+      replayGain: true,
+      r128: true,
+      batchMetadata: true,
+      mediaStore: true,
+      photosLibrary: true,
+    };
+    expect(ios.photosLibrary).toBe(true);
+    expect(ios.platform).toBe("ios");
+    // The compatibility promise: the deprecated flag does not flip.
+    expect(ios.mediaStore).toBe(true);
   });
 
   it("defaults artwork save to format preservation", () => {
