@@ -148,6 +148,10 @@ No entire library is loaded into memory. Each row is mapped and collected increm
 - **Structured metadata errors** — typed `MetadataErrorCode` (`PERMISSION_DENIED`, `UNSUPPORTED_FORMAT`, `CORRUPTED_FILE`, `MEDIA_REDACTED`, etc.)
 - **Metadata diagnostics** — `inspectMetadata()` reveals which extraction sources succeeded and per-field provenance
 - **Robust album artwork** — Android extracts embedded album art via `MediaMetadataRetriever` (works on Android 10+ scoped storage); iOS uses the album's representative asset
+- **Unified audio metadata (vNext)** — `getAudioMetadata()` / `getAudioMetadataBatch()` return one normalized `MediaStoreAudioMetadata` per file: standard tags, technical fields, artwork descriptor, and ReplayGain
+- **R128 + ReplayGain 1.0** — native head-scan for `R128_*_GAIN` / `REPLAYGAIN_*` tags (FLAC/Vorbis/Opus, ID3v2 TXXX, MP4 freeform); R128 Q8.8 normalized to dB natively, `source: "r128" | "replaygain"` with R128 priority
+- **Artwork engine** — `extractArtwork()` (embedded → cache file) and `saveArtwork()` with format preservation by default (no lossy recompression unless explicitly requested)
+- **Capability detection** — `getCapabilities()` so callers never assume per-platform support
 - **Folder statistics** — size histograms and per-type breakdowns for folders
 - **Incremental indexing** — delta-only refresh tracking added, modified, and removed items
 - **Plugin hooks** — extensible metadata system via JS-side plugin registration
@@ -493,6 +497,84 @@ interface MetadataInspectionResult {
 | `getArtworkBytes(albumId)` | `ArtworkBytesResult` | Album artwork as cached file with size |
 | `getVideoThumbnail(videoId, width?, height?)` | `string \| null` | Video thumbnail URI |
 | `getImageThumbnail(imageId, width?, height?)` | `string \| null` | Image thumbnail URI |
+
+### Unified Audio Metadata & Artwork Engine (vNext)
+
+First-class native replacement for `@missingcore`-style helpers (`saveArtwork` / `getR128Gain`).
+MediaStore answers **"what is inside this media file?"** — tags, artwork, R128/ReplayGain —
+while your audio engine owns **"how should I play it?"** (preamp, EQ, DSP).
+
+| Function | Returns | Description |
+|----------|---------|-------------|
+| `getAudioMetadata(uri)` | `MediaStoreAudioMetadata \| null` | Unified tags + technical fields + artwork + normalized `replayGain` |
+| `getAudioMetadataBatch(uris)` | `(MediaStoreAudioMetadata \| null)[]` | One bridge hop for library scans (artwork is availability-only in batch) |
+| `extractArtwork(audioUri)` | `MediaStoreArtwork \| null` | Embedded artwork → cache file usable by `<Image>` |
+| `saveArtwork(sourceUri, destUri?, options?)` | `MediaStoreArtwork \| null` | Persist artwork; `{ preserveFormat: true }` by default |
+| `getCapabilities()` | `MediaStoreCapabilities` | `{ metadata, artwork, replayGain, r128, batchMetadata, mediaStore }` |
+| `getPlaybackGainDb(uri, mode?, preampDb?)` | `number` | Effective playback gain without silent track/album mixing |
+
+```typescript
+import {
+  getAudioMetadata, getAudioMetadataBatch, extractArtwork,
+  saveArtwork, getCapabilities, resolveReplayGainDb,
+} from "@obsidian_north/react-native-mediastore";
+
+const metadata = await getAudioMetadata(uri);
+console.log(metadata?.replayGain);
+// { trackGain: -5.42, albumGain: -6.18, trackPeak: 0.98, albumPeak: 0.99, source: "r128" }
+
+// Playback: caller picks track/album — never silently mixed
+const gain = resolveReplayGainDb(metadata?.replayGain, "track", preampDb);
+const finalGain = gain + preampDb; // or: await getPlaybackGainDb(uri, "track", preampDb)
+
+// Library scan: one native call instead of N
+const tracks = await getAudioMetadataBatch(files);
+
+// Artwork: extract embedded art, or re-save with explicit compression
+const art = await extractArtwork(uri); // { uri, mimeType, width, height, size }
+await saveArtwork(uri);                                  // PNG → PNG, JPEG → JPEG (default)
+await saveArtwork(uri, null, { format: "jpeg", quality: 0.85 }); // opt-in compression
+
+if (!(await getCapabilities()).r128) { /* fall back */ }
+```
+
+Gain resolution hierarchy: R128 track gain → ReplayGain track gain → album gain (only when
+`mode === "album"`) → preamp → `0 dB`. R128 integers are Q8.8 (`256 = 1 dB`) and are normalized
+to dB floats in native code, so JS never parses raw tag encodings.
+
+```typescript
+interface MediaStoreAudioMetadata {
+  uri: string;
+  title: string | null; artist: string | null;
+  album: string | null; albumArtist: string | null;
+  genre: string | null; year: number | null;
+  trackNumber: number | null; discNumber: number | null;
+  duration: number | null;             // ms
+  bitrate: number | null; sampleRate: number | null; channels: number | null;
+  composer: string | null; comment: string | null;
+  artwork: MediaStoreArtwork | null;
+  replayGain: MediaStoreReplayGain | null;
+}
+
+interface MediaStoreReplayGain {
+  trackGain: number | null; albumGain: number | null;   // dB
+  trackPeak: number | null; albumPeak: number | null;   // linear
+  source: "r128" | "replaygain" | null;
+}
+
+interface MediaStoreArtwork {
+  uri: string; mimeType: string | null;
+  width: number | null; height: number | null; size: number | null;
+}
+
+interface ArtworkSaveOptions {
+  format?: "original" | "jpeg" | "png" | "webp";
+  quality?: number;            // 0–1, default 0.85 (only used when transcoding)
+  preserveFormat?: boolean;    // default true
+}
+
+type ReplayGainMode = "track" | "album" | "off";
+```
 
 ### System
 

@@ -9,6 +9,9 @@ import android.os.CancellationSignal
 import android.provider.MediaStore
 import com.facebook.react.bridge.*
 import com.facebook.react.modules.core.DeviceEventManagerModule
+import com.obsidian_north.mediastore.artwork.ArtworkExtractor
+import com.obsidian_north.mediastore.artwork.ArtworkSaver
+import com.obsidian_north.mediastore.metadata.audio.UnifiedAudioMetadataReader
 import com.obsidian_north.mediastore.models.*
 import com.obsidian_north.mediastore.utils.CursorUtils
 import com.obsidian_north.mediastore.utils.MimeUtils
@@ -460,6 +463,63 @@ class MediaStoreModule(reactContext: ReactApplicationContext) : ReactContextBase
   @ReactMethod
   fun getImageThumbnail(imageId: String, width: Int?, height: Int?, promise: Promise) {
     coroutineMethod({ generateThumbnail(imageId, "image", width, height) }, promise)
+  }
+
+  // --- vNext: unified audio metadata + artwork engine ---
+
+  @ReactMethod
+  fun getAudioMetadata(uri: String, promise: Promise) {
+    coroutineMethod({ UnifiedAudioMetadataReader.read(context, uri, includeArtworkFile = true) }, promise)
+  }
+
+  @ReactMethod
+  fun getAudioMetadataBatch(uris: ReadableArray?, promise: Promise) {
+    coroutineMethod({
+      val list = (0 until (uris?.size() ?: 0)).mapNotNull { uris?.getString(it) }
+      UnifiedAudioMetadataReader.readBatch(context, list)
+    }, promise)
+  }
+
+  @ReactMethod
+  fun extractArtwork(uri: String, promise: Promise) {
+    coroutineMethod({ ArtworkExtractor.extract(context, uri) }, promise)
+  }
+
+  @ReactMethod
+  fun saveArtwork(sourceUri: String, destUri: String?, options: ReadableMap?, promise: Promise) {
+    coroutineMethod({
+      val opts = ArtworkSaver.parseOptions(options?.let { readableMapToMap(it) })
+      ArtworkSaver.save(context, sourceUri, destUri, opts)
+    }, promise)
+  }
+
+  @ReactMethod
+  fun getCapabilities(promise: Promise) {
+    promise.resolve(Arguments.makeNativeMap(mapOf(
+      "metadata" to true,
+      "artwork" to true,
+      "replayGain" to true,
+      "r128" to true,
+      "batchMetadata" to true,
+      "mediaStore" to true,
+    )))
+  }
+
+  private fun readableMapToMap(map: ReadableMap): Map<String, Any?> {
+    val out = mutableMapOf<String, Any?>()
+    val iterator = map.keySetIterator()
+    while (iterator.hasNextKey()) {
+      val key = iterator.nextKey()
+      when (map.getType(key)) {
+        ReadableType.Null -> out[key] = null
+        ReadableType.Boolean -> out[key] = map.getBoolean(key)
+        ReadableType.Number -> out[key] = map.getDouble(key)
+        ReadableType.String -> out[key] = map.getString(key)
+        ReadableType.Map -> out[key] = readableMapToMap(map.getMap(key)!!)
+        ReadableType.Array -> out[key] = null
+      }
+    }
+    return out
   }
 
   // --- Event System ---

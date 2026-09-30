@@ -1556,6 +1556,236 @@ class MediaStoreRepository {
     catch { return false }
   }
 
+  // MARK: - vNext: unified audio metadata + artwork engine
+
+  /// Unified per-file metadata. Native owns R128 Q8.8 → dB normalization.
+  func getUnifiedAudioMetadata(uri: String) -> [String: Any?]? {
+    guard let url = resolveAudioFileURL(uri) else { return nil }
+    let asset = AVURLAsset(url: url)
+    var title: String?; var artist: String?; var album: String?
+    var albumArtist: String?; var genre: String?; var composer: String?
+    var trackNumber: Int?; var discNumber: Int?; var year: Int?
+    for item in asset.commonMetadata {
+      guard let key = item.commonKey?.rawValue else { continue }
+      let value = item.stringValue
+      switch key {
+      case "title": if title == nil { title = value }
+      case "artist": if artist == nil { artist = value }
+      case "albumName": if album == nil { album = value }
+      case "type": if genre == nil { genre = value }
+      case "creator": if composer == nil { composer = value }
+      default: break
+      }
+    }
+    // iTunes-style extras via available metadata formats (best-effort).
+    for format in asset.availableMetadataFormats {
+      for item in asset.metadata(forFormat: format) {
+        let k = (item.key as? String ?? item.identifier?.rawValue ?? "").uppercased()
+        let v = item.stringValue
+        if k.contains("ALBUMARTIST") { if albumArtist == nil { albumArtist = v } }
+        if k.contains("TRACKNUMBER") || k == "TRK" { if trackNumber == nil { trackNumber = Int(v ?? "") } }
+        if k.contains("DISCNUMBER") || k == "DISK" { if discNumber == nil { discNumber = Int(v ?? "") } }
+      }
+    }
+    let durationMs: Int? = {
+      let s = asset.duration.seconds
+      return s.isFinite && s > 0 ? Int(s * 1000) : nil
+    }()
+    var bitrate: Int?; var sampleRate: Int?; var channels: Int?
+    for track in asset.tracks where track.mediaType == .audio {
+      if let af = track.formatDescriptions.first as? CMFormatDescription {
+        let exts = af.extensions as? [AnyHashable: Any] ?? [:]
+        if let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(af)?.pointee {
+          if asbd.mSampleRate > 0 { sampleRate = Int(asbd.mSampleRate) }
+          if asbd.mChannelsPerFrame > 0 { channels = Int(asbd.mChannelsPerFrame) }
+        }
+        if let br = exts[kCMFormatDescriptionExtension_AudioBitRate] as? NSNumber { bitrate = br.intValue }
+      }
+      break
+    }
+    let replayGain = readReplayGainHead(url: url)
+    let artwork = extractArtworkFile(uri: uri, lightweight: true)
+    // NOTE: no `as Any` on optionals — boxed nils bridge unreliably.
+    // compact() strips nils; the TS normalizer maps missing keys to null.
+    var out: [String: Any?] = [
+      "uri": uri,
+      "title": title, "artist": artist, "album": album,
+      "albumArtist": albumArtist, "genre": genre, "year": year,
+      "trackNumber": trackNumber, "discNumber": discNumber,
+      "duration": durationMs, "bitrate": bitrate,
+      "sampleRate": sampleRate, "channels": channels,
+      "composer": composer,
+      "artwork": artwork, "replayGain": replayGain,
+    ]
+    return compact(out)
+  }
+
+  /// Extract embedded artwork to a cache file. lightweight=true returns
+  /// availability only (for batch scans).
+  func extractArtworkFile(uri: String, lightweight: Bool = false) -> [String: Any?]? {
+    guard let url = resolveAudioFileURL(uri) else { return nil }
+    let asset = AVURLAsset(url: url)
+    var imageData: Data?
+    for item in asset.commonMetadata where item.commonKey?.rawValue == "artwork" {
+      if let data = item.dataValue { imageData = data; break }
+    }
+    if imageData == nil {
+      // Fallback: first 2MB head scan cannot yield image bytes; report absent.
+      return nil
+    }
+    guard let data = imageData, !data.isEmpty else { return nil }
+    if lightweight {
+      return ["uri": uri, "mimeType": nil, "width": nil, "height": nil, "size": nil]
+    }
+    let mime = artworkMime(data: data)
+    let ext = mime == "image/png" ? "png" : "jpg"
+    let fileUrl = FileManager.default.temporaryDirectory.appendingPathComponent("art_\(abs(uri.hashValue)).\(ext)")
+    do { try data.write(to: fileUrl) } catch { return nil }
+    var w: Int?; var h: Int?
+    if let src = CGImageSourceCreateWithData(data as CFData, nil),
+       let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [String: Any] {
+      w = props[kCGImagePropertyPixelWidth as String] as? Int
+      h = props[kCGImagePropertyPixelHeight as String] as? Int
+    }
+    var art: [String: Any?] = ["uri": fileUrl.absoluteString, "mimeType": mime, "width": w, "height": h, "size": data.count]
+    return compact(art)
+  }
+
+  /// Persist artwork with format preservation by default.
+  func saveArtworkFile(sourceUri: String, destUri: String?, options: [String: Any]?) -> [String: Any?]? {
+    let preserve = (options?["preserveFormat"] as? Bool) ?? true
+    let format = ((options?["format"] as? String) ?? "original").lowercased()
+    let quality = (options?["quality"] as? Double) ?? 0.85
+    // Resolve source bytes: embedded artwork first, then raw file.
+    var data: Data?
+    if let art = extractArtworkFile(uri: sourceUri), let artUri = art["uri"] as? String,
+       let url = URL(string: artUri), let d = try? Data(contentsOf: url) {
+      data = d
+    } else if let url = URL(string: sourceUri), let d = try? Data(contentsOf: url) {
+      data = d
+    } else {
+      let path = sourceUri.hasPrefix("file://") ? URL(string: sourceUri)?.path ?? sourceUri : sourceUri
+      data = try? Data(contentsOf: URL(fileURLWithPath: path))
+    }
+    guard let bytes = data, !bytes.isEmpty, let image = UIImage(data: bytes) else { return nil }
+    let sourceMime = artworkMime(data: bytes)
+    let targetMime: String = {
+      if preserve && (format == "original" || format.isEmpty) { return sourceMime }
+      switch format {
+      case "original": return sourceMime
+      case "jpeg", "jpg": return "image/jpeg"
+      case "png": return "image/png"
+      default: return sourceMime
+      }
+    }()
+    let outData: Data? = targetMime == "image/png" ? image.pngData() : image.jpegData(compressionQuality: CGFloat(quality))
+    guard let final = outData else { return nil }
+    let ext = targetMime == "image/png" ? "png" : "jpg"
+    let outUrl: URL = {
+      if let d = destUri, !d.isEmpty {
+        let p = d.hasPrefix("file://") ? URL(string: d)?.path ?? d : d
+        return URL(fileURLWithPath: p)
+      }
+      return FileManager.default.temporaryDirectory.appendingPathComponent("saved_\(abs(sourceUri.hashValue)).\(ext)")
+    }()
+    do { try final.write(to: outUrl) } catch { return nil }
+    var w: Int?; var h: Int?
+    if let src = CGImageSourceCreateWithData(final as CFData, nil),
+       let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [String: Any] {
+      w = props[kCGImagePropertyPixelWidth as String] as? Int
+      h = props[kCGImagePropertyPixelHeight as String] as? Int
+    }
+    var saved: [String: Any?] = ["uri": outUrl.absoluteString, "mimeType": targetMime, "width": w, "height": h, "size": final.count]
+    return compact(saved)
+  }
+
+  private func resolveAudioFileURL(_ uri: String) -> URL? {
+    if let url = URL(string: uri), url.scheme == "file" { return url }
+    if URL(string: uri)?.scheme == nil {
+      let fileURL = URL(fileURLWithPath: uri)
+      if FileManager.default.fileExists(atPath: fileURL.path) { return fileURL }
+      if let assetURL = syncAssetFileURL(forAssetId: uri) { return assetURL }
+    }
+    return URL(string: uri)
+  }
+
+  private func syncAssetFileURL(forAssetId id: String) -> URL? {
+    let result = PHAsset.fetchAssets(withLocalIdentifiers: [id], options: nil)
+    guard let asset = result.firstObject else { return nil }
+    return syncAssetFileURL(for: asset)
+  }
+
+  private func readReplayGainHead(url: URL) -> [String: Any?] {
+    guard let handle = try? FileHandle(forReadingFrom: url) else { return emptyGain() }
+    // FileHandle.read(upToCount:) / close() need iOS 13.4+; fall back on 13.0–13.3.
+    defer {
+      if #available(iOS 13.4, *) { try? handle.close() }
+      else { handle.closeFile() }
+    }
+    let data: Data
+    if #available(iOS 13.4, *) {
+      data = (try? handle.read(upToCount: 2 * 1024 * 1024)) ?? Data()
+    } else {
+      data = (try? handle.readData(ofLength: 2 * 1024 * 1024)) ?? Data()
+    }
+    guard !data.isEmpty, let head = String(data: data, encoding: .isoLatin1) else { return emptyGain() }
+    var r128Track: Double?; var r128Album: Double?; var rgTrack: Double?; var rgAlbum: Double?
+    var trackPeak: Double?; var albumPeak: Double?
+    let pattern = "(?i)(R128_TRACK_GAIN|R128_ALBUM_GAIN|REPLAYGAIN_TRACK_GAIN|REPLAYGAIN_ALBUM_GAIN|REPLAYGAIN_TRACK_PEAK|REPLAYGAIN_ALBUM_PEAK)\\s*=\\s*([^\\r\\n;]{1,32})"
+    if let regex = try? NSRegularExpression(pattern: pattern) {
+      let range = NSRange(head.startIndex..., in: head)
+      for match in regex.matches(in: head, range: range) {
+        guard match.numberOfRanges == 3,
+              let kRange = Range(match.range(at: 1), in: head),
+              let vRange = Range(match.range(at: 2), in: head) else { continue }
+        let key = String(head[kRange]).uppercased()
+        let raw = String(head[vRange]).trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+        switch key {
+        case "R128_TRACK_GAIN": if r128Track == nil { r128Track = r128ToDb(raw) }
+        case "R128_ALBUM_GAIN": if r128Album == nil { r128Album = r128ToDb(raw) }
+        case "REPLAYGAIN_TRACK_GAIN": if rgTrack == nil { rgTrack = gainToDb(raw) }
+        case "REPLAYGAIN_ALBUM_GAIN": if rgAlbum == nil { rgAlbum = gainToDb(raw) }
+        case "REPLAYGAIN_TRACK_PEAK": if trackPeak == nil { trackPeak = Double(raw) }
+        case "REPLAYGAIN_ALBUM_PEAK": if albumPeak == nil { albumPeak = Double(raw) }
+        default: break
+        }
+      }
+    }
+    let hasR128 = r128Track != nil || r128Album != nil
+    let hasRg = rgTrack != nil || rgAlbum != nil || trackPeak != nil || albumPeak != nil
+    if !hasR128 && !hasRg { return emptyGain() }
+    return compact([
+      "trackGain": (r128Track ?? rgTrack),
+      "albumGain": (r128Album ?? rgAlbum),
+      "trackPeak": trackPeak, "albumPeak": albumPeak,
+      "source": hasR128 ? "r128" : "replaygain",
+    ])
+  }
+
+  private func r128ToDb(_ raw: String) -> Double? {
+    let cleaned = raw.replacingOccurrences(of: "(?i)\\s*dB\\s*$", with: "", options: .regularExpression).trimmingCharacters(in: .whitespaces)
+    guard let v = Double(cleaned) else { return nil }
+    if !cleaned.contains(".") && abs(v) >= 64 { return v / 256.0 }
+    return v
+  }
+
+  private func gainToDb(_ raw: String) -> Double? {
+    let cleaned = raw.replacingOccurrences(of: "(?i)\\s*dB\\s*$", with: "", options: .regularExpression).trimmingCharacters(in: .whitespaces)
+    return Double(cleaned)
+  }
+
+  private func emptyGain() -> [String: Any?] {
+    ["trackGain": nil, "albumGain": nil, "trackPeak": nil, "albumPeak": nil, "source": nil]
+  }
+
+  private func artworkMime(data: Data) -> String {
+    if data.count >= 3 && data[0] == 0xFF && data[1] == 0xD8 { return "image/jpeg" }
+    if data.count >= 8 && data[0] == 0x89 && data[1] == 0x50 && data[2] == 0x4E && data[3] == 0x47 { return "image/png" }
+    if data.count >= 12 && data[0] == 0x52 && data[8] == 0x57 { return "image/webp" }
+    if data.count >= 6 && data[0] == 0x47 && data[1] == 0x49 && data[2] == 0x46 { return "image/gif" }
+    return "image/jpeg"
+  }
+
   private func compact(_ dict: [String: Any?]) -> [String: Any?] {
     var result: [String: Any?] = [:]
     for (key, value) in dict where value != nil {

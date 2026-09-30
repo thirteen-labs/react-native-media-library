@@ -1,5 +1,15 @@
 # Changelog
 
+## 3.6.0 (2026-09-06)
+
+### New Features — Native Metadata & Artwork Engine (replaces `@missingcore`)
+
+- **Unified audio metadata** `getAudioMetadata(uri)` / `getAudioMetadataBatch(uris)`: single `MediaStoreAudioMetadata` with standard tags, technical fields, `artwork`, and normalized `replayGain`. Batch keeps artwork lightweight (availability only) for library scans.
+- **R128 + ReplayGain 1.0** (`metadata/audio/R128Parser.kt`, `ReplayGainReader.kt`): dependency-free head-scan for `R128_*_GAIN` / `REPLAYGAIN_*` across FLAC/Vorbis/Opus comments, ID3v2 TXXX, and MP4 freeform atoms. R128 Q8.8 (`256 = 1 dB`) normalized natively; `source: "r128" | "replaygain"` with R128 priority. iOS mirrors via `readReplayGainHead` in `MediaStoreRepository.swift`.
+- **Artwork engine** (`artwork/ArtworkExtractor.kt`, `ArtworkSaver.kt`): `extractArtwork(uri)` (embedded → cache file with mime/dimensions/size) and `saveArtwork(source, dest?, options?)` with `{ preserveFormat: true }` default — no lossy JPEG 0.85 recompression unless `{ format: "jpeg", quality }` requested.
+- **Capabilities** `getCapabilities()`: `{ metadata, artwork, replayGain, r128, batchMetadata, mediaStore }` so Lumora never assumes per-platform support.
+- **TS helpers** (`src/audioMetadata.types.ts`): `r128RawToDb`, `parseReplayGainDb/Peak`, `resolveReplayGainDb(metadata, mode, preamp)` implementing the track/album/off hierarchy, plus `getPlaybackGainDb(uri, mode, preamp)`.
+
 ## 3.5.4 (2026-09-05)
 
 ### Bug Fixes

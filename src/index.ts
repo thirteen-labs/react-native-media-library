@@ -56,6 +56,23 @@ import type {
   ArtworkBytesResult,
   MetadataInspectionResult,
 } from "./MediaStoreModule.types";
+import type {
+  ArtworkSaveFormat,
+  ArtworkSaveOptions,
+  MediaStoreArtwork,
+  MediaStoreAudioMetadata,
+  MediaStoreCapabilities,
+  MediaStoreReplayGain,
+  ReplayGainMode,
+  ReplayGainSource,
+} from "./audioMetadata.types";
+import {
+  DEFAULT_ARTWORK_SAVE_OPTIONS,
+  parseReplayGainDb,
+  parseReplayGainPeak,
+  r128RawToDb,
+  resolveReplayGainDb,
+} from "./audioMetadata.types";
 
 export type {
   AudioItem,
@@ -110,6 +127,25 @@ export type {
   ArtworkUriResult,
   ArtworkBytesResult,
   MetadataInspectionResult,
+};
+
+export type {
+  ArtworkSaveFormat,
+  ArtworkSaveOptions,
+  MediaStoreArtwork,
+  MediaStoreAudioMetadata,
+  MediaStoreCapabilities,
+  MediaStoreReplayGain,
+  ReplayGainMode,
+  ReplayGainSource,
+};
+
+export {
+  DEFAULT_ARTWORK_SAVE_OPTIONS,
+  parseReplayGainDb,
+  parseReplayGainPeak,
+  r128RawToDb,
+  resolveReplayGainDb,
 };
 
 export { SortOrder, SortField } from "./MediaStoreModule.types";
@@ -281,6 +317,225 @@ export async function inspectMetadata(
   uri: string
 ): Promise<MetadataInspectionResult> {
   return NativeModule.inspectMetadata(uri);
+}
+
+// ---------------------------------------------------------------------------
+// vNext: unified audio metadata + artwork engine
+// (replaces `@missingcore` saveArtwork / getR128Gain)
+// ---------------------------------------------------------------------------
+
+const VNEXT_CAPABILITIES_FALLBACK: MediaStoreCapabilities = {
+  metadata: true,
+  artwork: false,
+  replayGain: false,
+  r128: false,
+  batchMetadata: false,
+  mediaStore: true,
+};
+
+function normalizeAudioMetadata(value: unknown, uri: string): MediaStoreAudioMetadata | null {
+  if (value == null) return null;
+  const raw = value as Record<string, unknown>;
+  const replayGainRaw = raw.replayGain as Record<string, unknown> | null | undefined;
+  const artworkRaw = raw.artwork as Record<string, unknown> | null | undefined;
+  const numOrNull = (v: unknown): number | null =>
+    typeof v === "number" && Number.isFinite(v) ? v : null;
+  const strOrNull = (v: unknown): string | null =>
+    typeof v === "string" ? v : v == null ? null : String(v);
+  return {
+    uri: typeof raw.uri === "string" ? raw.uri : uri,
+    title: strOrNull(raw.title),
+    artist: strOrNull(raw.artist),
+    album: strOrNull(raw.album),
+    albumArtist: strOrNull(raw.albumArtist),
+    genre: strOrNull(raw.genre),
+    year: numOrNull(raw.year),
+    trackNumber: numOrNull(raw.trackNumber),
+    discNumber: numOrNull(raw.discNumber),
+    duration: numOrNull(raw.duration),
+    bitrate: numOrNull(raw.bitrate),
+    sampleRate: numOrNull(raw.sampleRate),
+    channels: numOrNull(raw.channels),
+    composer: strOrNull(raw.composer),
+    comment: strOrNull((raw as Record<string, unknown>).comment),
+    artwork:
+      artworkRaw == null
+        ? null
+        : {
+            uri: typeof artworkRaw.uri === "string" ? (artworkRaw.uri as string) : uri,
+            mimeType: strOrNull(artworkRaw.mimeType),
+            width: numOrNull(artworkRaw.width),
+            height: numOrNull(artworkRaw.height),
+            size: numOrNull(artworkRaw.size),
+          },
+    replayGain:
+      replayGainRaw == null
+        ? null
+        : {
+            trackGain: numOrNull(replayGainRaw.trackGain),
+            albumGain: numOrNull(replayGainRaw.albumGain),
+            trackPeak: numOrNull(replayGainRaw.trackPeak),
+            albumPeak: numOrNull(replayGainRaw.albumPeak),
+            source:
+              replayGainRaw.source === "r128" || replayGainRaw.source === "replaygain"
+                ? replayGainRaw.source
+                : null,
+          },
+  };
+}
+
+/**
+ * Unified per-file metadata. Native layer owns tag reading + R128/Q8.8
+ * normalization, so callers just use `metadata.replayGain?.trackGain`.
+ */
+export async function getAudioMetadata(uri: string): Promise<MediaStoreAudioMetadata | null> {
+  const fn = NativeModule.getAudioMetadata;
+  if (typeof fn !== "function") {
+    const detailed = await getDetailedMetadataByUri(uri);
+    if (detailed == null) return null;
+    const audio = (detailed.audio ?? {}) as Record<string, unknown>;
+    return normalizeAudioMetadata(
+      {
+        uri,
+        title: audio.title ?? null,
+        artist: audio.artist ?? null,
+        album: audio.album ?? null,
+        albumArtist: audio.albumArtist ?? null,
+        genre: audio.genre ?? null,
+        year: audio.year ?? null,
+        trackNumber: audio.trackNumber ?? null,
+        discNumber: audio.discNumber ?? null,
+        duration:
+          detailed.durationMs != null ? Math.round(Number(detailed.durationMs)) : null,
+        bitrate: audio.bitrate ?? null,
+        sampleRate: audio.sampleRate ?? null,
+        channels: audio.channels ?? null,
+        composer: audio.composer ?? null,
+        comment: null,
+        artwork: detailed.artwork
+          ? {
+              uri: (detailed.artwork as { uri?: string }).uri ?? uri,
+              mimeType: null,
+              width: null,
+              height: null,
+              size: null,
+            }
+          : null,
+        replayGain: null,
+      },
+      uri
+    );
+  }
+  return normalizeAudioMetadata(await fn.call(NativeModule, uri), uri);
+}
+
+/** Batch variant for library scans — one bridge hop instead of N. */
+export async function getAudioMetadataBatch(
+  uris: string[]
+): Promise<(MediaStoreAudioMetadata | null)[]> {
+  const fn = NativeModule.getAudioMetadataBatch;
+  if (typeof fn !== "function") {
+    const out: (MediaStoreAudioMetadata | null)[] = [];
+    for (const uri of uris) out.push(await getAudioMetadata(uri));
+    return out;
+  }
+  const results = await fn.call(NativeModule, uris);
+  return (results ?? []).map((r: unknown, i: number) =>
+    normalizeAudioMetadata(r, uris[i] ?? "")
+  );
+}
+
+/** Extract embedded artwork to a cache file usable by `<Image>`. */
+export async function extractArtwork(audioUri: string): Promise<MediaStoreArtwork | null> {
+  const fn = NativeModule.extractArtwork;
+  if (typeof fn !== "function") return null;
+  const raw = (await fn.call(NativeModule, audioUri)) as Record<string, unknown> | null;
+  if (raw == null) return null;
+  return {
+    uri: typeof raw.uri === "string" ? raw.uri : audioUri,
+    mimeType: typeof raw.mimeType === "string" ? raw.mimeType : null,
+    width: typeof raw.width === "number" ? raw.width : null,
+    height: typeof raw.height === "number" ? raw.height : null,
+    size: typeof raw.size === "number" ? raw.size : null,
+  };
+}
+
+export type SaveArtworkArgs =
+  | [sourceUri: string, options?: ArtworkSaveOptions]
+  | [sourceUri: string, destUri: string | null, options?: ArtworkSaveOptions];
+
+/**
+ * Persist artwork with format preservation by default
+ * (`{ preserveFormat: true }`), avoiding lossy JPEG 0.85 recompression
+ * unless explicitly requested via `{ format: "jpeg", quality: 0.85 }`.
+ */
+export async function saveArtwork(
+  sourceUri: string,
+  destOrOptions?: string | ArtworkSaveOptions | null,
+  maybeOptions?: ArtworkSaveOptions
+): Promise<MediaStoreArtwork | null> {
+  const fn = NativeModule.saveArtwork;
+  if (typeof fn !== "function") return null;
+  let destUri: string | null = null;
+  let options: ArtworkSaveOptions = {};
+  if (typeof destOrOptions === "string") {
+    destUri = destOrOptions;
+    options = maybeOptions ?? {};
+  } else if (destOrOptions != null) {
+    options = destOrOptions;
+    if (typeof maybeOptions?.format === "string") options = maybeOptions;
+  }
+  const merged: ArtworkSaveOptions = {
+    preserveFormat: true,
+    ...options,
+    ...(options.format == null ? { format: "original" as const } : {}),
+  };
+  const raw = (await fn.call(
+    NativeModule,
+    sourceUri,
+    destUri,
+    merged
+  )) as Record<string, unknown> | null;
+  if (raw == null) return null;
+  return {
+    uri: typeof raw.uri === "string" ? raw.uri : sourceUri,
+    mimeType: typeof raw.mimeType === "string" ? raw.mimeType : null,
+    width: typeof raw.width === "number" ? raw.width : null,
+    height: typeof raw.height === "number" ? raw.height : null,
+    size: typeof raw.size === "number" ? raw.size : null,
+  };
+}
+
+/** Capability detection so callers never assume per-platform support. */
+export async function getCapabilities(): Promise<MediaStoreCapabilities> {
+  const fn = NativeModule.getCapabilities;
+  if (typeof fn !== "function") return { ...VNEXT_CAPABILITIES_FALLBACK };
+  try {
+    const caps = (await fn.call(NativeModule)) as Partial<MediaStoreCapabilities>;
+    return {
+      metadata: caps.metadata ?? true,
+      artwork: caps.artwork ?? false,
+      replayGain: caps.replayGain ?? false,
+      r128: caps.r128 ?? false,
+      batchMetadata: caps.batchMetadata ?? false,
+      mediaStore: caps.mediaStore ?? true,
+    };
+  } catch (_e) {
+    return { ...VNEXT_CAPABILITIES_FALLBACK };
+  }
+}
+
+/**
+ * Convenience: effective playback gain for an audio URI.
+ * `mode` selects track/album without silently mixing them.
+ */
+export async function getPlaybackGainDb(
+  uri: string,
+  mode: ReplayGainMode = "track",
+  preampDb = 0
+): Promise<number> {
+  const metadata = await getAudioMetadata(uri);
+  return resolveReplayGainDb(metadata?.replayGain, mode, preampDb);
 }
 
 export async function cancelMetadataExtraction(jobId: string): Promise<boolean> {

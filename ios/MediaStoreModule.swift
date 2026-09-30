@@ -510,6 +510,49 @@ class MediaStoreModule: RCTEventEmitter {
     resolve(true)
   }
 
+  // MARK: - vNext: unified audio metadata + artwork engine
+
+  @objc
+  func getAudioMetadata(_ uri: String,
+                        resolver resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
+    let repository = MediaStoreRepository()
+    resolve(repository.getUnifiedAudioMetadata(uri: uri))
+  }
+
+  @objc
+  func getAudioMetadataBatch(_ uris: [String],
+                             resolver resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
+    let repository = MediaStoreRepository()
+    // NSNull (not boxed nil) so missing entries bridge to JS null.
+    resolve(uris.map { repository.getUnifiedAudioMetadata(uri: $0) ?? NSNull() })
+  }
+
+  @objc
+  func extractArtwork(_ uri: String,
+                      resolver resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
+    let repository = MediaStoreRepository()
+    resolve(repository.extractArtworkFile(uri: uri))
+  }
+
+  @objc
+  func saveArtwork(_ sourceUri: String, destUri: String?, options: NSDictionary?,
+                   resolver resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
+    let repository = MediaStoreRepository()
+    resolve(repository.saveArtworkFile(sourceUri: sourceUri, destUri: destUri, options: options as? [String: Any]))
+  }
+
+  @objc
+  func getCapabilities(_ resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
+    resolve([
+      "metadata": true,
+      "artwork": true,
+      "replayGain": true,
+      "r128": true,
+      "batchMetadata": true,
+      "mediaStore": true,
+    ] as [String: Any])
+  }
+
   // MARK: - Lifecycle
 
   override static func requiresMainQueueSetup() -> Bool {
