@@ -16,11 +16,40 @@ jobs:
           node-version: 20
           registry-url: https://registry.npmjs.org
           cache: npm
-      - run: npm ci
-      - run: npm run build
-      - run: npm publish
+
+      # Backfilling tags for versions that already shipped would otherwise fail
+      # at `npm publish` ("cannot publish over the previously published
+      # versions"), and -- because publish runs before the release step -- never
+      # reach the GitHub release either. Detect that up front and skip cleanly.
+      - name: Check whether this version is already on npm
+        id: check
+        run: |
+          PKG=$(node -p "require('./package.json').name")
+          VERSION=$(node -p "require('./package.json').version")
+          echo "package=$PKG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          if npm view "$PKG@$VERSION" version >/dev/null 2>&1; then
+            echo "already=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::$PKG@$VERSION is already published -- nothing to do."
+          else
+            echo "already=false" >> "$GITHUB_OUTPUT"
+            echo "Publishing $PKG@$VERSION."
+          fi
+
+      - name: Build
+        if: steps.check.outputs.already == 'false'
+        run: |
+          npm ci
+          npm run build
+
+      - name: Publish to npm
+        if: steps.check.outputs.already == 'false'
+        run: npm publish
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-      - uses: softprops/action-gh-release@v2
+
+      - name: Create GitHub release
+        if: steps.check.outputs.already == 'false'
+        uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
