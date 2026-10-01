@@ -30,13 +30,13 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Northern-Obsidian/react-native-media-library.git"
+    "url": "git+https://github.com/thirteen-labs/react-native-media-library.git"
   },
   "bugs": {
-    "url": "https://github.com/Northern-Obsidian/react-native-media-library/issues"
+    "url": "https://github.com/thirteen-labs/react-native-media-library/issues"
   },
   "author": "cadmus_labs",
-  "homepage": "https://github.com/Northern-Obsidian/react-native-media-library",
+  "homepage": "https://github.com/thirteen-labs/react-native-media-library",
   "scripts": {
     "build": "tsc --project tsconfig.json",
     "clean": "rimraf build",
