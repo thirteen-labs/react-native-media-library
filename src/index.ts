@@ -631,11 +631,13 @@ export async function getLibrary(
   filter?: FilterOptions,
   pagination?: PaginationOptions
 ): Promise<LibraryResult> {
-  return NativeModule.getLibrary(
-    sort ?? null,
-    filter ?? null,
-    pagination ?? null
-  );
+  // Neither Android nor iOS exposes a native `getLibrary`, so batch the four
+  // existing queries. This keeps the documented API working on both platforms
+  // with the same sorting, filtering, pagination, and plugin behavior as the
+  // individual getters.
+  const { audio, videos, images, documents, totalCount } =
+    await getLibraryQuery({ sort, filter, pagination });
+  return { audio, videos, images, documents, totalCount };
 }
 
 export async function getLibraryQuery(
@@ -828,8 +830,11 @@ export async function readFileContents(filePath: string): Promise<string | null>
   return NativeModule.readFileContents(filePath);
 }
 
-export async function writeFileContents(filePath: string, data: string): Promise<boolean> {
-  return NativeModule.writeFileContents(data, filePath);
+export async function writeFileContents(
+  filePath: string,
+  data: string | Uint8Array
+): Promise<boolean> {
+  return NativeModule.writeFileContents(filePath, data);
 }
 
 export function registerPlugin(plugin: MetadataPlugin): void {

@@ -11,6 +11,8 @@ import com.obsidian_north.mediastore.metadata.video.VideoMetadataExtractor
 import com.obsidian_north.mediastore.utils.MimeUtils
 import kotlinx.coroutines.*
 import java.io.File
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicInteger
 
 class MetadataService(private val contentResolver: ContentResolver) {
 
@@ -23,6 +25,36 @@ class MetadataService(private val contentResolver: ContentResolver) {
 
   private val cache = MetadataCache()
   private var queue: MetadataQueue? = null
+
+  private data class ActiveJob(val uri: String, val signal: CancellationSignal)
+  private val activeJobs = ConcurrentHashMap<String, ActiveJob>()
+  private val jobCounter = AtomicInteger(0)
+
+  /** Registers an in-flight extraction so it can be cancelled by id or URI. */
+  fun beginJob(uri: String): String {
+    val id = "meta_${jobCounter.incrementAndGet()}"
+    activeJobs[id] = ActiveJob(uri, CancellationSignal())
+    return id
+  }
+
+  fun signalFor(jobId: String): CancellationSignal? = activeJobs[jobId]?.signal
+
+  fun endJob(jobId: String) {
+    activeJobs.remove(jobId)
+  }
+
+  /** `jobIdOrUri` accepts either a registered job id or the URI being read. */
+  fun cancelJob(jobIdOrUri: String): Boolean {
+    val job = activeJobs[jobIdOrUri] ?: activeJobs.values.firstOrNull { it.uri == jobIdOrUri } ?: return false
+    job.signal.cancel()
+    return true
+  }
+
+  fun cancelAllJobs(): Boolean {
+    if (activeJobs.isEmpty()) return false
+    activeJobs.values.forEach { it.signal.cancel() }
+    return true
+  }
 
   companion object {
     // Hoisted to avoid re-allocating these on every metadata call.
@@ -230,14 +262,14 @@ class MetadataService(private val contentResolver: ContentResolver) {
     } catch (_: Exception) { null }
   }
 
-  fun inspectMetadata(uri: String): Map<String, Any?> {
+  fun inspectMetadata(uri: String, cancellationSignal: CancellationSignal? = null): Map<String, Any?> {
     val result = mutableMapOf<String, Any?>()
     result["uri"] = uri
 
     val sources = mutableMapOf<String, Boolean>()
     val fields = mutableMapOf<String, Map<String, Any?>>()
 
-    val extraction = extractMetadataByUri(uri)
+    val extraction = extractMetadataByUri(uri, cancellationSignal)
 
     sources["mediaStore"] = true
     sources["mediaMetadataRetriever"] = extraction.status != ExtractionStatus.FAILED

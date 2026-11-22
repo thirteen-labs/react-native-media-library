@@ -45,7 +45,8 @@
     "lint": "tsc --noEmit",
     "test": "jest",
     "prepare": "npm run build",
-    "sync-version": "node scripts/sync-version.js"
+    "sync-version": "node scripts/sync-version.js",
+    "check:native": "node scripts/check-native.js"
   },
   "files": [
     "build",

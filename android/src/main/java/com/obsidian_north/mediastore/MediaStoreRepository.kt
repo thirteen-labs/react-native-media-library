@@ -3,6 +3,7 @@ package com.obsidian_north.mediastore
 import android.content.Context
 import android.database.Cursor
 import android.net.Uri
+import android.os.Build
 import android.provider.MediaStore
 import com.obsidian_north.mediastore.metadata.MetadataService
 import com.obsidian_north.mediastore.models.*
@@ -38,14 +39,31 @@ class MediaStoreRepository(private val context: Context) {
     contentResolver.query(MediaStore.Audio.Playlists.EXTERNAL_CONTENT_URI, projection, selection, selectionArgs, sortOrder)
 
   fun queryFolders(selection: String?, sortOrder: String?): Cursor? {
-    val projection = arrayOf(MediaStore.Files.FileColumns._ID, MediaStore.Files.FileColumns.PARENT, MediaStore.Files.FileColumns.MIME_TYPE, MediaStore.Files.FileColumns.TITLE, MediaStore.Files.FileColumns.SIZE, MediaStore.Files.FileColumns.DATA, MediaStore.Files.FileColumns.RELATIVE_PATH)
-    return contentResolver.query(MediaStore.Files.getContentUri("external"), projection, selection, null, sortOrder)
+    val projection = mutableListOf(
+      MediaStore.Files.FileColumns._ID, MediaStore.Files.FileColumns.PARENT,
+      MediaStore.Files.FileColumns.MIME_TYPE, MediaStore.Files.FileColumns.TITLE,
+      MediaStore.Files.FileColumns.SIZE, MediaStore.Files.FileColumns.DATA
+    )
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+      projection.add(MediaStore.Files.FileColumns.RELATIVE_PATH)
+    }
+    return contentResolver.query(MediaStore.Files.getContentUri("external"), projection.toTypedArray(), selection, null, sortOrder)
   }
 
   fun queryFolderStatistics(folderPath: String?): Cursor? {
-    val projection = arrayOf(MediaStore.Files.FileColumns._ID, MediaStore.Files.FileColumns.MIME_TYPE, MediaStore.Files.FileColumns.SIZE, MediaStore.Files.FileColumns.RELATIVE_PATH)
-    val selection = if (folderPath != null) "${MediaStore.Files.FileColumns.RELATIVE_PATH} LIKE '${MediaStoreQueryBuilder().escapeLike(folderPath)}%'" else "${MediaStore.Files.FileColumns.SIZE} > 0"
-    return contentResolver.query(MediaStore.Files.getContentUri("external"), projection, selection, null, null)
+    val projection = mutableListOf(
+      MediaStore.Files.FileColumns._ID, MediaStore.Files.FileColumns.MIME_TYPE,
+      MediaStore.Files.FileColumns.SIZE
+    )
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+      projection.add(MediaStore.Files.FileColumns.RELATIVE_PATH)
+    }
+    val selection = if (folderPath != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+      "${MediaStore.Files.FileColumns.RELATIVE_PATH} LIKE '${MediaStoreQueryBuilder().escapeLike(folderPath)}%'"
+    } else {
+      "${MediaStore.Files.FileColumns.SIZE} > 0"
+    }
+    return contentResolver.query(MediaStore.Files.getContentUri("external"), projection.toTypedArray(), selection, null, null)
   }
 
   fun queryIncremental(sinceTimestamp: Long, projection: Array<String>?, type: String): Cursor? {

@@ -1,13 +1,16 @@
 package com.obsidian_north.mediastore
 
 import android.Manifest
-import android.app.Activity
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
-import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.facebook.react.bridge.ReactApplicationContext
+import com.facebook.react.modules.core.PermissionAwareActivity
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 
 class MediaStorePermissions(private val context: Context, private val reactContext: ReactApplicationContext? = null) {
   fun checkStatus(): Map<String, Any?> {
@@ -33,12 +36,21 @@ class MediaStorePermissions(private val context: Context, private val reactConte
   suspend fun request(): Map<String, Any?> {
     if (isAlreadyGranted()) return checkStatus()
 
-    val activity = getActivity()
-    if (activity != null) {
-      val permissions = getRequiredPermissions()
-      ActivityCompat.requestPermissions(activity, permissions, PERMISSION_REQUEST_CODE)
-      kotlinx.coroutines.delay(500)
+    val activity = withContext(Dispatchers.Main) {
+      reactContext?.currentActivity as? PermissionAwareActivity
+    } ?: return checkStatus()
+
+    // Wait for the user's answer instead of guessing with a fixed delay.
+    // PermissionAwareActivity is what ReactActivity implements; the listener
+    // is called by Activity.onRequestPermissionsResult.
+    val answered = CompletableDeferred<Unit>()
+    withContext(Dispatchers.Main) {
+      activity.requestPermissions(getRequiredPermissions(), PERMISSION_REQUEST_CODE) { requestCode, _, _ ->
+        if (requestCode == PERMISSION_REQUEST_CODE) answered.complete(Unit)
+        true // remove the listener
+      }
     }
+    withTimeoutOrNull(PERMISSION_TIMEOUT_MS) { answered.await() }
 
     return checkStatus()
   }
@@ -61,15 +73,12 @@ class MediaStorePermissions(private val context: Context, private val reactConte
     }
   }
 
-  private fun getActivity(): Activity? {
-    return reactContext?.currentActivity
-  }
-
   private fun isPermissionGranted(permission: String): Boolean {
     return ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
   }
 
   companion object {
     private const val PERMISSION_REQUEST_CODE = 1984
+    private const val PERMISSION_TIMEOUT_MS = 60_000L
   }
 }

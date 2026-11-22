@@ -1,5 +1,40 @@
 # Changelog
 
+## Unreleased
+
+### Bug Fixes
+
+- **`getLibrary()` threw on both platforms.** Neither Android nor iOS implements a native `getLibrary` method, but the JS wrapper called it unconditionally. It is now implemented by batching the four existing queries (`getAudio`/`getVideos`/`getImages`/`getDocuments`) with the same sort/filter/pagination and plugin behavior, so it works on Android and iOS.
+- **`writeFileContents(filePath, data)` passed its arguments in the wrong order**, and the public type accepted only `string` while the native spec also allows `Uint8Array`. The wrapper now forwards `(filePath, data)` and accepts both data types. (Native implementations are still tracked separately.)
+- **`DuplicateItem.items` was required but never populated.** Android and iOS only report `fileHash`, `count`, and `totalSize`. The field is now optional and widened to the four media item types so callers are forced to handle its absence.
+
+### Native — iOS
+
+- **The iOS target could not compile or register.** Removed three duplicate `getByUri` declarations, replaced the invalid `PHAsset.fetchOptions()` call in `MediaStoreObserver` with real `PHFetchResult` diffing, and added `ios/MediaStoreModule.m` with `RCT_EXTERN_REMAP_MODULE(MediaStore, ...)` plus every exported method. Swift classes cannot use `RCT_EXPORT_MODULE`, so this bridge file is what makes the module discoverable by the bridge. The podspec now compiles `*.m` as well as `*.swift`.
+- **Added the missing iOS exports** `search`, `getDetailedMetadataByUri`, `getDirectoryStatistics`, `getMimeType`, `getFileExtension`, `readFileContents`, and `writeFileContents`. File methods now resolve the same path strings / numbers as Android instead of booleans, and `getArtworkUri` bridges `nil` as `NSNull`.
+- **Fixed iOS directory scanning**: full paths and correct `isDirectory` values in `readDirectory`/`readDirectoryRecursive`, a working size histogram in `directoryStatistics`, and a valid `createFile` implementation.
+
+### Native — Android
+
+- **API-level projection guards**: `RELATIVE_PATH` (API 29), `ALBUM_ARTIST`/`DISC_NUMBER`/`IS_FAVORITE`/`CD_TRACK_NUMBER`/`NUM_TRACKS` and video colour fields (API 30) are now added only when the device supports them, so queries no longer fail on API 24–28. `includeHidden` and `getFavorites` are guarded the same way.
+- **Query cache now actually hits**: option records are `data class`es, so the cache key built from them is stable instead of an object identity hash.
+- **`ImageItem.dateTaken` is now milliseconds** on Android, matching iOS and the rest of the JS API.
+- **`readDirectory`/`readDirectoryRecursive` return `{ name, path, isDirectory }` objects** on Android (previously bare path strings), including directories in recursive results, matching iOS and the TypeScript types.
+- **Added `readFileContents`/`writeFileContents` bridge methods** so the documented file API works on Android too. Binary data is accepted as a `Dynamic` value (string or byte array).
+
+### Follow-up fixes
+
+- **`requestPermissions()` could resolve before the user answered.** Android now waits on `PermissionAwareActivity`'s result listener (with a 60s safety timeout) instead of a fixed 500 ms delay, and the request is dispatched on the main thread.
+- **Metadata cancellation was a no-op on Android.** `MetadataService` now tracks in-flight extractions with `CancellationSignal`s, and `cancelMetadataExtraction()` accepts either a job id or the URI being read. `cancelAllMetadataExtraction()` cancels every active job. iOS, which has no job queue, now honestly resolves `false` instead of `true`.
+- **`getRecent()` / `getLargestFiles()` applied `limit` per media type**, so `limit: 50` could return 200 items. They now sort the combined results and take the limit once.
+- **`refreshIncremental()` reported every change as `added`.** Both platforms now track known item IDs and report `added` / `modified` separately.
+- **Bulk image queries no longer open every file for EXIF.** `cameraMake`/`cameraModel` are only read for single-item lookups; full EXIF remains available through `getMetadata()` / `getDetailedMetadata()`.
+- **CI now checks native parity.** Added `scripts/check-native.js` (`npm run check:native`) and a `native-sanity` job that catches duplicate Swift methods, missing bridge declarations, and spec methods missing on Android. Full native compilation still requires a host app.
+
+### Tests
+
+- Added `__tests__/index.test.ts` covering the `writeFileContents` argument order and the `getLibrary` batch behavior.
+
 ## 3.6.1 (2026-09-30)
 
 ### Bug Fixes

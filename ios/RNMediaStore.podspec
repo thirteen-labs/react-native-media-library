@@ -15,6 +15,6 @@ Pod::Spec.new do |s|
 
   s.dependency 'React-Core'
 
-  s.source_files = '*.swift'
+  s.source_files = '*.swift', '*.m'
   s.frameworks   = 'Photos', 'AVFoundation', 'UIKit', 'ImageIO', 'PDFKit', 'CoreMedia'
 end

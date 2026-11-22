@@ -231,8 +231,15 @@ export interface MediaStoreStatistics {
 export interface DuplicateItem {
   fileHash: string;
   count: number;
-  items: AudioItem[];
   totalSize: number;
+  /**
+   * The duplicated items, when the platform reports them.
+   *
+   * Android and iOS currently return only `fileHash`, `count`, and
+   * `totalSize`, so this is absent at runtime. Kept optional so callers
+   * must handle its absence instead of iterating `undefined`.
+   */
+  items?: (AudioItem | VideoItem | ImageItem | DocumentItem)[];
 }
 
 export interface MediaChangeEvent {

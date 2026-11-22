@@ -137,7 +137,7 @@ No entire library is loaded into memory. Each row is mapped and collected increm
 - **LRU caching** — optional in-memory cache with configurable TTL, auto-invalidated on changes
 - **Fully typed** — complete TypeScript definitions with a strongly typed native module spec (concrete return types, no `any`)
 - **Reactive** — React hook `useMediaChangeEvent` for real-time updates
-- **Batch queries** — `getLibrary()` returns all media types in one native call
+- **Batch queries** — `getLibrary()` returns all media types in one call, batching the four native queries in parallel on both platforms
 - **Thumbnail/artwork** — helper methods for album art and video/image thumbnails
 - **Comprehensive deep metadata** — `getMetadata()` / `getDetailedMetadata()` / `getDetailedMetadataByUri()` open the file to extract true technical metadata: codec, bitrate, sample rate, channels, color space (audio/video), and full EXIF (aperture, ISO, focal length, GPS, flash, white balance…) for images; best-effort page/word counts for documents
 - **Structured metadata extraction** — dedicated audio/video/image extractors with `MediaMetadataRetriever` id3 tag extraction, `MediaExtractor` format analysis, and `ExifInterface` camera/GPS data
@@ -334,7 +334,7 @@ function MediaWatcher() {
 | `getLargestFiles(mediaType?, limit?)` | `(AudioItem \| VideoItem \| ImageItem \| DocumentItem)[]` | Largest files by size |
 | `getDuplicates(mediaType?)` | `DuplicateItem[]` | Detect duplicate files (Android only) |
 | `getStatistics()` | `MediaStoreStatistics` | Aggregate counts and sizes |
-| `getLibrary(sort?, filter?, pagination?)` | `LibraryResult` | Audio, video, images, docs in one batch |
+| `getLibrary(sort?, filter?, pagination?)` | `LibraryResult` | Audio, video, images, docs in one call (batched in JS) |
 | `getLibraryQuery(options?)` | `LibraryQueryResult` | Improved batch query with per-type pagination and statistics |
 | `getFolderStatistics(folderPath?)` | `FolderStatistics[]` | Size histograms and type breakdowns per folder |
 | `refreshIncremental(lastTimestamp?)` | `IncrementalChanges` | Delta-only refresh tracking changes since timestamp |
@@ -592,8 +592,10 @@ type ReplayGainMode = "track" | "album" | "off";
 | `checkPermissions()` | `PermissionStatus` | Check current permission state |
 | `requestPermissions()` | `PermissionStatus` | Request media permissions |
 | `useMediaChangeEvent(callback?)` | `MediaChangeEvent \| null` | React hook for change events |
-| `cancelMetadataExtraction(jobId)` | `boolean` | Cancel a queued/running metadata extraction job |
-| `cancelAllMetadataExtraction()` | `boolean` | Cancel all pending metadata extraction jobs |
+| `cancelMetadataExtraction(jobIdOrUri)` | `boolean` | Cancel an in-flight metadata extraction on Android (accepts a job id or the URI being read); always `false` on iOS |
+| `cancelAllMetadataExtraction()` | `boolean` | Cancel all in-flight metadata extractions on Android; always `false` on iOS |
+
+On Android, `getMetadata()` / `getDetailedMetadata*()` / `inspectMetadata()` register a cancellation signal while they run. You can pass the URI you passed to those methods to `cancelMetadataExtraction()`; the returned boolean reports whether something was actually cancelled. iOS extracts metadata synchronously per call and has no job queue, so both cancellation calls resolve `false`.
 
 ---
 

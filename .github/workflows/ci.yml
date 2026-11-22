@@ -54,3 +54,15 @@ jobs:
       - run: npm ci
       - run: npm run build
 
+  native-sanity:
+    name: Native parity
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      # Static check of the JS spec vs Swift/ObjC/Kotlin bridges. Full native
+      # compilation still requires a host app and is not run in this workflow.
+      - run: node scripts/check-native.js
+

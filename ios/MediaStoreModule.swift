@@ -1,7 +1,29 @@
 import Foundation
 import Photos
 
-@objc(MediaStore)
+/// Shared result envelope used by the detailed-metadata bridge methods so
+/// `unwrapDetailedMetadata()` in the JS layer can consume both variants.
+private enum MetadataBridge {
+  static func wrap(_ metadata: [String: Any?]) -> [String: Any] {
+    return [
+      "metadata": metadata,
+      "status": "complete",
+      "warnings": [] as [String],
+      "errorCode": NSNull(),
+    ]
+  }
+
+  static func failed(_ message: String) -> [String: Any] {
+    return [
+      "metadata": [:] as [String: Any],
+      "status": "failed",
+      "warnings": [message],
+      "errorCode": "FILE_NOT_FOUND",
+    ]
+  }
+}
+
+@objc(MediaStoreModule)
 class MediaStoreModule: RCTEventEmitter {
   private var hasListeners = false
 
@@ -130,11 +152,17 @@ class MediaStoreModule: RCTEventEmitter {
 
   // MARK: - Search
 
-@objc
-  func getByUri(_ uri: String,
-               resolver resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
+  @objc
+  func search(_ options: NSDictionary?,
+              resolver resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
     let repository = MediaStoreRepository()
-    resolve(repository.getByUri(uri: uri))
+    var opts: [String: Any?] = [:]
+    if let options = options {
+      for (key, value) in options {
+        opts[key as? String ?? ""] = value
+      }
+    }
+    resolve(repository.search(options: opts))
   }
 
   @objc
@@ -147,10 +175,10 @@ class MediaStoreModule: RCTEventEmitter {
   // MARK: - Lookups
 
   @objc
-  func getById(_ mediaType: String, id: String,
+  func getById(_ mediaType: String, itemId: String,
               resolver resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
     let repository = MediaStoreRepository()
-    resolve(repository.getById(mediaType: mediaType, id: id))
+    resolve(repository.getById(mediaType: mediaType, id: itemId))
   }
 
   @objc
@@ -161,88 +189,148 @@ class MediaStoreModule: RCTEventEmitter {
   }
 
   @objc
-  func getDetailedMetadata(_ mediaType: String, id: String,
+  func getDetailedMetadata(_ mediaType: String, itemId: String,
                            resolver resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
     if #available(iOS 16.0, *) {
       Task {
         let repository = MediaStoreRepository()
-        let result = await repository.getDetailedMetadataAsync(mediaType: mediaType, id: id)
+        let result = await repository.getDetailedMetadataAsync(mediaType: mediaType, id: itemId)
         resolve(result)
       }
     } else {
       let repository = MediaStoreRepository()
-      resolve(repository.getDetailedMetadata(mediaType: mediaType, id: id))
+      resolve(repository.getDetailedMetadata(mediaType: mediaType, id: itemId))
     }
   }
 
-@objc
-  func getByUri(_ uri: String,
-               resolver resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
-    let repository = MediaStoreRepository()
-    resolve(repository.getByUri(uri: uri))
+  @objc
+  func getDetailedMetadataByUri(_ uri: String,
+                                resolver resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
+    if #available(iOS 16.0, *) {
+      Task {
+        let repository = MediaStoreRepository()
+        guard let detailed = await repository.getDetailedMetadataByUriAsync(uri: uri) else {
+          resolve(MetadataBridge.failed("File not found or unsupported"))
+          return
+        }
+        resolve(MetadataBridge.wrap(detailed))
+      }
+    } else {
+      let repository = MediaStoreRepository()
+      guard let detailed = repository.getDetailedMetadataByUri(uri: uri) else {
+        resolve(MetadataBridge.failed("File not found or unsupported"))
+        return
+      }
+      resolve(MetadataBridge.wrap(detailed))
+    }
   }
 
   @objc
-  func fileExists(atPath path: String,
+  func fileExists(_ path: String,
                  resolver resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
     let repository = MediaStoreRepository()
     resolve(repository.fileExists(atPath: path))
   }
 
   @objc
-  func readDirectory(atPath path: String,
+  func readDirectory(_ path: String,
                      resolver resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
     let repository = MediaStoreRepository()
-    resolve(repository.readDirectory(atPath: path))
+    resolve(repository.readDirectory(atPath: path) ?? [])
   }
 
   @objc
-  func readDirectoryRecursive(atPath path: String,
+  func readDirectoryRecursive(_ path: String,
                              resolver resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
     let repository = MediaStoreRepository()
     resolve(repository.readDirectoryRecursive(atPath: path))
   }
 
   @objc
-  func fileSize(atPath path: String,
+  func fileSize(_ path: String,
                 resolver resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
     let repository = MediaStoreRepository()
-    resolve(repository.fileSize(atPath: path))
+    resolve(repository.fileSize(atPath: path) ?? 0)
   }
 
   @objc
-  func createFile(atPath path: String,
+  func createFile(_ path: String,
                  resolver resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
     let repository = MediaStoreRepository()
-    resolve(repository.createFile(atPath: path))
+    resolve(repository.createFile(atPath: path, contents: Data()) ? path : "")
   }
 
   @objc
-  func renameFile(oldPath: String, newPath: String,
+  func renameFile(_ oldPath: String, newPath: String,
                  resolver resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
     let repository = MediaStoreRepository()
-    resolve(repository.renameItem(atPath: oldPath, to: newPath))
+    resolve(repository.renameItem(atPath: oldPath, to: newPath) ? newPath : "")
   }
 
   @objc
-  func deleteFile(atPath path: String,
+  func deleteFile(_ path: String,
                  resolver resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
     let repository = MediaStoreRepository()
     resolve(repository.deleteItem(atPath: path))
   }
 
   @objc
-  func copyFile(srcPath: String, dstPath: String,
+  func copyFile(_ srcPath: String, dstPath: String,
                resolver resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
     let repository = MediaStoreRepository()
-    resolve(repository.copyItem(atPath: srcPath, to: dstPath))
+    resolve(repository.copyItem(atPath: srcPath, to: dstPath) ? dstPath : "")
   }
 
   @objc
-  func moveFile(srcPath: String, dstPath: String,
+  func moveFile(_ srcPath: String, dstPath: String,
                resolver resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
     let repository = MediaStoreRepository()
-    resolve(repository.renameItem(atPath: srcPath, to: dstPath))
+    resolve(repository.renameItem(atPath: srcPath, to: dstPath) ? dstPath : "")
+  }
+
+  @objc
+  func getDirectoryStatistics(_ dirPath: String,
+                              resolver resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
+    let repository = MediaStoreRepository()
+    resolve(repository.directoryStatistics(atPath: dirPath))
+  }
+
+  @objc
+  func getMimeType(_ filePath: String,
+                   resolver resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
+    let repository = MediaStoreRepository()
+    resolve(repository.mimeType(forPath: filePath))
+  }
+
+  @objc
+  func getFileExtension(_ filePath: String,
+                        resolver resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
+    let repository = MediaStoreRepository()
+    resolve(repository.fileExtension(forPath: filePath))
+  }
+
+  @objc
+  func readFileContents(_ filePath: String,
+                        resolver resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
+    let repository = MediaStoreRepository()
+    resolve(repository.readFileContents(atPath: filePath) ?? NSNull())
+  }
+
+  @objc
+  func writeFileContents(_ filePath: String, data: Any,
+                         resolver resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
+    let repository = MediaStoreRepository()
+    let bytes: Data?
+    if let string = data as? String {
+      bytes = string.data(using: .utf8)
+    } else if let numbers = data as? [NSNumber] {
+      bytes = Data(numbers.map { UInt8(truncating: $0) })
+    } else if let numbers = data as? [Int] {
+      bytes = Data(numbers.map { UInt8(truncating: NSNumber(value: $0)) })
+    } else {
+      bytes = nil
+    }
+    resolve(bytes.map { repository.writeFileContents($0, toPath: filePath) } ?? false)
   }
 
   // MARK: - Recent
@@ -448,7 +536,7 @@ class MediaStoreModule: RCTEventEmitter {
                    resolver resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
     let repository = MediaStoreRepository()
     let uri = repository.getAlbumArtwork(albumId: albumId)
-    resolve(["uri": uri as Any] as [String: Any])
+    resolve(["uri": uri ?? NSNull()] as [String: Any])
   }
 
   @objc
@@ -502,12 +590,14 @@ class MediaStoreModule: RCTEventEmitter {
   @objc
   func cancelMetadataExtraction(_ jobId: String,
                              resolver resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
-    resolve(true)
+    // iOS extracts metadata synchronously per call; there is no job queue to
+    // cancel. Return false rather than pretending a cancellation happened.
+    resolve(false)
   }
 
   @objc
   func cancelAllMetadataExtraction(_ resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
-    resolve(true)
+    resolve(false)
   }
 
   // MARK: - vNext: unified audio metadata + artwork engine

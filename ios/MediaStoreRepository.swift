@@ -8,6 +8,7 @@ import CoreMedia
 class MediaStoreRepository {
   private let imageManager = PHCachingImageManager()
   static var lastRefreshTimestamp: Double = Date().timeIntervalSince1970 * 1000
+  private static var knownAssetIds: Set<String> = []
 
   // MARK: - Public PHAsset file URL helpers (replaces private KVC value(forKey:"URL"))
 
@@ -331,7 +332,16 @@ class MediaStoreRepository {
     let videoResult = PHAsset.fetchAssets(with: .video, options: fetchOptions)
     let imageResult = PHAsset.fetchAssets(with: .image, options: fetchOptions)
 
-    addedCount += audioResult.count + videoResult.count + imageResult.count
+    for result in [audioResult, videoResult, imageResult] {
+      result.enumerateObjects { asset, _, _ in
+        if MediaStoreRepository.knownAssetIds.contains(asset.localIdentifier) {
+          modifiedCount += 1
+        } else {
+          addedCount += 1
+          MediaStoreRepository.knownAssetIds.insert(asset.localIdentifier)
+        }
+      }
+    }
 
     MediaStoreRepository.lastRefreshTimestamp = Date().timeIntervalSince1970 * 1000
 
@@ -1439,14 +1449,16 @@ class MediaStoreRepository {
   }
 
   func readDirectory(atPath path: String) -> [[String: Any?]]? {
-    guard let urls = try? FileManager.default.contentsOfDirectory(atPath: path) else { return nil }
-    return urls.map { url in
+    guard let names = try? FileManager.default.contentsOfDirectory(atPath: path) else { return nil }
+    let base = URL(fileURLWithPath: path)
+    return names.map { name in
+      let fullPath = base.appendingPathComponent(name).path
       var isDir: ObjCBool = false
-      let isDirectory = FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir)
-      [
-        "name": url.lastPathComponent,
-        "path": url.path,
-        "isDirectory": isDirectory,
+      let exists = FileManager.default.fileExists(atPath: fullPath, isDirectory: &isDir)
+      return [
+        "name": name,
+        "path": fullPath,
+        "isDirectory": exists && isDir.boolValue,
         "isSymlink": false
       ]
     }
@@ -1454,39 +1466,39 @@ class MediaStoreRepository {
 
   func readDirectoryRecursive(atPath path: String) -> [[String: Any?]] {
     var result: [[String: Any?]] = []
-    enumerateItems(atPath: path, result: &result)
+    enumerateItems(atPath: path, &result)
     return result
   }
 
   private func enumerateItems(atPath path: String, _ result: inout [[String: Any?]]) {
-    guard let urls = try? FileManager.default.contentsOfDirectory(atPath: path) else { return }
-    for url in urls {
+    guard let names = try? FileManager.default.contentsOfDirectory(atPath: path) else { return }
+    let base = URL(fileURLWithPath: path)
+    for name in names {
+      let fullPath = base.appendingPathComponent(name).path
       var isDir: ObjCBool = false
-      let isDirectory = FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir)
-      let item: [String: Any?] = [
-        "name": url.lastPathComponent,
-        "path": url.path,
+      let exists = FileManager.default.fileExists(atPath: fullPath, isDirectory: &isDir)
+      let isDirectory = exists && isDir.boolValue
+      result.append([
+        "name": name,
+        "path": fullPath,
         "isDirectory": isDirectory,
         "isSymlink": false
-      ]
-      result.append(item)
+      ])
       if isDirectory {
-        enumerateItems(url.path, &result)
+        enumerateItems(atPath: fullPath, &result)
       }
     }
   }
 
   func fileSize(atPath path: String) -> Int64? {
-    do { return try FileManager.default.attributesOfItem(atPath: path)[.size] as? Int64 }
-    catch { return nil }
+    do {
+      guard let size = try FileManager.default.attributesOfItem(atPath: path)[.size] as? NSNumber else { return nil }
+      return size.int64Value
+    } catch { return nil }
   }
 
   func createFile(atPath path: String, contents data: Data?, attributes: [FileAttributeKey: Any]? = nil) -> Bool {
-    do {
-      try data?.write(to: URL(fileURLWithPath: path))
-      try FileManager.default.createItem(atPath: path)
-      return true
-    } catch { return false }
+    FileManager.default.createFile(atPath: path, contents: data ?? Data(), attributes: attributes)
   }
 
   func renameItem(atPath oldPath: String, to newPath: String) -> Bool {
@@ -1513,19 +1525,32 @@ class MediaStoreRepository {
       "from10to100MB": 0, "from100MBto1GB": 0, "greaterThan1GB": 0
     ]
 
-    enumerateItems(atPath: path) { item in
-      if let isDir = item["isDirectory"] as? Bool, !isDir {
-        fileCount += 1
-        if let size = item["size"] as? Int64 {
-          totalSize += size
-        }
-      } else {
-        folderCount += 1
-      }
+    let fm = FileManager.default
+    guard let enumerator = fm.enumerator(atPath: path) else {
+      return ["fileCount": 0, "totalSize": 0, "folderCount": 0, "histogram": histogram]
     }
-
-    // Re-calculate histogram from items
-    // (simplified - in production would track sizes during enumeration)
+    let base = URL(fileURLWithPath: path)
+    while let name = enumerator.nextObject() as? String {
+      let fullPath = base.appendingPathComponent(name).path
+      var isDir: ObjCBool = false
+      guard fm.fileExists(atPath: fullPath, isDirectory: &isDir) else { continue }
+      if isDir.boolValue {
+        folderCount += 1
+        continue
+      }
+      fileCount += 1
+      var size: Int64 = 0
+      if let attributes = try? fm.attributesOfItem(atPath: fullPath),
+         let number = attributes[.size] as? NSNumber {
+        size = number.int64Value
+      }
+      totalSize += size
+      if size < 1_048_576 { histogram["lessThan1MB", default: 0] += 1 }
+      else if size < 10_485_760 { histogram["from1to10MB", default: 0] += 1 }
+      else if size < 104_857_600 { histogram["from10to100MB", default: 0] += 1 }
+      else if size < 1_073_741_824 { histogram["from100MBto1GB", default: 0] += 1 }
+      else { histogram["greaterThan1GB", default: 0] += 1 }
+    }
 
     return [
       "fileCount": fileCount,

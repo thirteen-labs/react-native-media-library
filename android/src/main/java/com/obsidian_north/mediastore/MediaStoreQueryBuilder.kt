@@ -14,20 +14,25 @@ class MediaStoreQueryBuilder {
       MediaStore.Audio.Media.ARTIST, MediaStore.Audio.Media.ALBUM,
       MediaStore.Audio.Media.ALBUM_ID, MediaStore.Audio.Media.DURATION,
       MediaStore.Audio.Media.SIZE, MediaStore.Audio.Media.TRACK,
-      MediaStore.Audio.Media.DISC_NUMBER, MediaStore.Audio.Media.YEAR,
+      MediaStore.Audio.Media.YEAR,
       MediaStore.Audio.Media.DATE_ADDED, MediaStore.Audio.Media.DATE_MODIFIED,
       MediaStore.Audio.Media.BITRATE, MediaStore.Audio.Media.MIME_TYPE,
       MediaStore.Audio.Media.DATA, MediaStore.Audio.Media.DISPLAY_NAME,
-      MediaStore.Audio.Media.RELATIVE_PATH, MediaStore.Audio.Media.COMPOSER,
-      MediaStore.Audio.Media.ALBUM_ARTIST, MediaStore.Audio.Media.BOOKMARK,
-      MediaStore.Audio.Media.IS_FAVORITE,
+      MediaStore.Audio.Media.COMPOSER, MediaStore.Audio.Media.BOOKMARK,
       MediaStore.Audio.Media.IS_MUSIC, MediaStore.Audio.Media.IS_PODCAST,
       MediaStore.Audio.Media.IS_RINGTONE, MediaStore.Audio.Media.IS_ALARM,
-      MediaStore.Audio.Media.IS_NOTIFICATION, MediaStore.Audio.Media.CD_TRACK_NUMBER,
-      MediaStore.Audio.Media.NUM_TRACKS
+      MediaStore.Audio.Media.IS_NOTIFICATION
     )
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+      columns.add(MediaStore.Audio.Media.RELATIVE_PATH)
+    }
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
       columns.add(MediaStore.Audio.Media.WRITER)
+      columns.add(MediaStore.Audio.Media.ALBUM_ARTIST)
+      columns.add(MediaStore.Audio.Media.DISC_NUMBER)
+      columns.add(MediaStore.Audio.Media.IS_FAVORITE)
+      columns.add(MediaStore.Audio.Media.CD_TRACK_NUMBER)
+      columns.add(MediaStore.Audio.Media.NUM_TRACKS)
     }
     return columns.toTypedArray()
   }
@@ -40,13 +45,18 @@ class MediaStoreQueryBuilder {
       MediaStore.Video.Media.MIME_TYPE, MediaStore.Video.Media.DATA,
       MediaStore.Video.Media.DISPLAY_NAME, MediaStore.Video.Media.DATE_ADDED,
       MediaStore.Video.Media.DATE_MODIFIED, MediaStore.Video.Media.RESOLUTION,
-      MediaStore.Video.Media.ORIENTATION, MediaStore.Video.Media.DESCRIPTION,
-      MediaStore.Video.Media.TAGS, MediaStore.Video.Media.RELATIVE_PATH,
-      MediaStore.Video.Media.COLOR_STANDARD, MediaStore.Video.Media.COLOR_TRANSFER
+      MediaStore.Video.Media.ORIENTATION
     )
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+      columns.add(MediaStore.Video.Media.DESCRIPTION)
+      columns.add(MediaStore.Video.Media.TAGS)
+      columns.add(MediaStore.Video.Media.RELATIVE_PATH)
       columns.add(MediaStore.Video.Media.BUCKET_ID)
       columns.add(MediaStore.Video.Media.BUCKET_DISPLAY_NAME)
+    }
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+      columns.add(MediaStore.Video.Media.COLOR_STANDARD)
+      columns.add(MediaStore.Video.Media.COLOR_TRANSFER)
     }
     return columns.toTypedArray()
   }
@@ -59,23 +69,29 @@ class MediaStoreQueryBuilder {
       MediaStore.Images.Media.MIME_TYPE, MediaStore.Images.Media.DATA,
       MediaStore.Images.Media.DISPLAY_NAME, MediaStore.Images.Media.DATE_ADDED,
       MediaStore.Images.Media.DATE_MODIFIED, MediaStore.Images.Media.DATE_TAKEN,
-      MediaStore.Images.Media.LATITUDE, MediaStore.Images.Media.LONGITUDE,
-      MediaStore.Images.Media.DESCRIPTION, MediaStore.Images.Media.RELATIVE_PATH
+      MediaStore.Images.Media.LATITUDE, MediaStore.Images.Media.LONGITUDE
     )
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+      columns.add(MediaStore.Images.Media.DESCRIPTION)
+      columns.add(MediaStore.Images.Media.RELATIVE_PATH)
       columns.add(MediaStore.Images.Media.BUCKET_ID)
       columns.add(MediaStore.Images.Media.BUCKET_DISPLAY_NAME)
     }
     return columns.toTypedArray()
   }
 
-  fun buildDocumentProjection() = arrayOf(
-    MediaStore.Files.FileColumns._ID, MediaStore.Files.FileColumns.TITLE,
-    MediaStore.Files.FileColumns.SIZE, MediaStore.Files.FileColumns.MIME_TYPE,
-    MediaStore.Files.FileColumns.DATA, MediaStore.Files.FileColumns.DISPLAY_NAME,
-    MediaStore.Files.FileColumns.DATE_ADDED, MediaStore.Files.FileColumns.DATE_MODIFIED,
-    MediaStore.Files.FileColumns.RELATIVE_PATH
-  )
+  fun buildDocumentProjection(): Array<String> {
+    val columns = mutableListOf(
+      MediaStore.Files.FileColumns._ID, MediaStore.Files.FileColumns.TITLE,
+      MediaStore.Files.FileColumns.SIZE, MediaStore.Files.FileColumns.MIME_TYPE,
+      MediaStore.Files.FileColumns.DATA, MediaStore.Files.FileColumns.DISPLAY_NAME,
+      MediaStore.Files.FileColumns.DATE_ADDED, MediaStore.Files.FileColumns.DATE_MODIFIED
+    )
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+      columns.add(MediaStore.Files.FileColumns.RELATIVE_PATH)
+    }
+    return columns.toTypedArray()
+  }
 
   fun buildAlbumProjection() = arrayOf(
     MediaStore.Audio.Albums._ID, MediaStore.Audio.Albums.ALBUM,
@@ -123,7 +139,13 @@ class MediaStoreQueryBuilder {
     filter.favoritesOnly?.let { if (it) conditions.add("${MediaStore.MediaColumns.IS_FAVORITE} = 1") }
     filter.minResolution?.let { conditions.add("(${MediaStore.Video.Media.WIDTH} * ${MediaStore.Video.Media.HEIGHT}) >= $it") }
     filter.maxResolution?.let { conditions.add("(${MediaStore.Video.Media.WIDTH} * ${MediaStore.Video.Media.HEIGHT}) <= $it") }
-    filter.includeHidden?.let { if (!it) conditions.add("${MediaStore.MediaColumns.IS_TRASHED} = 0") }
+    // IS_TRASHED was added in API 30; older providers do not have the column.
+    // It also is not a true "hidden" flag, so only apply it where it exists.
+    filter.includeHidden?.let {
+      if (!it && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+        conditions.add("${MediaStore.MediaColumns.IS_TRASHED} = 0")
+      }
+    }
 
     return if (conditions.isNotEmpty()) conditions.joinToString(" AND ") else null
   }

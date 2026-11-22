@@ -31,6 +31,18 @@ class MediaStoreModule(reactContext: ReactApplicationContext) : ReactContextBase
   private val observer by lazy { MediaStoreObserver(context) }
   private val cache by lazy { MediaStoreCache() }
   private var isObserving = false
+  private val knownIdsByType = mutableMapOf<String, MutableSet<String>>()
+
+  @Synchronized
+  private fun classifyIds(type: String, ids: List<String>): Pair<Int, Int> {
+    val known = knownIdsByType.getOrPut(type) { mutableSetOf() }
+    var added = 0
+    var modified = 0
+    for (id in ids) {
+      if (known.add(id)) added++ else modified++
+    }
+    return added to modified
+  }
 
   override fun getName(): String = "MediaStore"
 
@@ -242,14 +254,27 @@ class MediaStoreModule(reactContext: ReactApplicationContext) : ReactContextBase
     coroutineMethod({
       val since = lastTimestamp?.toLong() ?: cache.getLastRefreshTimestamp()
       var addedCount = 0
+      var modifiedCount = 0
       for (type in listOf("audio", "video", "image", "document")) {
         val projection = when (type) { "audio" -> queryBuilder.buildAudioProjection(); "video" -> queryBuilder.buildVideoProjection(); "image" -> queryBuilder.buildImageProjection(); "document" -> queryBuilder.buildDocumentProjection(); else -> continue }
         val cursor = repository.queryIncremental(since, projection, type)
-        cursor?.use { addedCount += it.count }
+        val ids = mutableListOf<String>()
+        cursor?.use { c ->
+          val idIndex = c.getColumnIndex(MediaStore.MediaColumns._ID)
+          while (c.moveToNext()) {
+            if (idIndex >= 0) ids.add(c.getString(idIndex) ?: "")
+          }
+        }
+        val (added, modified) = classifyIds(type, ids)
+        addedCount += added
+        modifiedCount += modified
       }
       val removedItems = cache.getAndClearRemovedItems()
       cache.setLastRefreshTimestamp(System.currentTimeMillis())
-      IncrementalChangesRecord().apply { added = addedCount; removed = removedItems.size; timestamp = System.currentTimeMillis() }.toMap()
+      IncrementalChangesRecord().apply {
+        added = addedCount; modified = modifiedCount
+        removed = removedItems.size; timestamp = System.currentTimeMillis()
+      }.toMap()
     }, promise)
   }
 
@@ -283,26 +308,38 @@ class MediaStoreModule(reactContext: ReactApplicationContext) : ReactContextBase
   @ReactMethod
   fun getDetailedMetadata(mediaType: String, id: String, promise: Promise) {
     coroutineMethod({
-      val result = repository.metadataService.extractMetadata(mediaType, id)
-      mapOf(
-        "metadata" to result.metadata,
-        "status" to result.status.jsValue,
-        "warnings" to result.warnings,
-        "errorCode" to (result.errorCode?.jsCode),
-      )
+      val service = repository.metadataService
+      val jobId = service.beginJob("$mediaType:$id")
+      try {
+        val result = service.extractMetadata(mediaType, id, service.signalFor(jobId))
+        mapOf(
+          "metadata" to result.metadata,
+          "status" to result.status.jsValue,
+          "warnings" to result.warnings,
+          "errorCode" to (result.errorCode?.jsCode),
+        )
+      } finally {
+        service.endJob(jobId)
+      }
     }, promise)
   }
 
   @ReactMethod
   fun getDetailedMetadataByUri(uri: String, promise: Promise) {
     coroutineMethod({
-      val result = repository.metadataService.extractMetadataByUri(uri)
-      mapOf(
-        "metadata" to result.metadata,
-        "status" to result.status.jsValue,
-        "warnings" to result.warnings,
-        "errorCode" to (result.errorCode?.jsCode),
-      )
+      val service = repository.metadataService
+      val jobId = service.beginJob(uri)
+      try {
+        val result = service.extractMetadataByUri(uri, service.signalFor(jobId))
+        mapOf(
+          "metadata" to result.metadata,
+          "status" to result.status.jsValue,
+          "warnings" to result.warnings,
+          "errorCode" to (result.errorCode?.jsCode),
+        )
+      } finally {
+        service.endJob(jobId)
+      }
     }, promise)
   }
 
@@ -310,7 +347,13 @@ class MediaStoreModule(reactContext: ReactApplicationContext) : ReactContextBase
   fun getMetadata(uri: String, options: ReadableMap?, promise: Promise) {
     coroutineMethod({
       val level = options?.getString("level") ?: "full"
-      val result = repository.metadataService.extractMetadataByUri(uri)
+      val service = repository.metadataService
+      val jobId = service.beginJob(uri)
+      val result = try {
+        service.extractMetadataByUri(uri, service.signalFor(jobId))
+      } finally {
+        service.endJob(jobId)
+      }
       val metadata = result.metadata
 
       val filtered = when (level) {
@@ -354,33 +397,40 @@ class MediaStoreModule(reactContext: ReactApplicationContext) : ReactContextBase
 
   @ReactMethod
   fun inspectMetadata(uri: String, promise: Promise) {
-    coroutineMethod({ repository.metadataService.inspectMetadata(uri) }, promise)
+    coroutineMethod({
+      val service = repository.metadataService
+      val jobId = service.beginJob(uri)
+      try {
+        service.inspectMetadata(uri, service.signalFor(jobId))
+      } finally {
+        service.endJob(jobId)
+      }
+    }, promise)
   }
 
   @ReactMethod
   fun cancelMetadataExtraction(jobId: String, promise: Promise) {
-    repository.metadataService.getQueue()?.cancel(jobId)
-    promise.resolve(true)
+    promise.resolve(repository.metadataService.cancelJob(jobId))
   }
 
   @ReactMethod
   fun cancelAllMetadataExtraction(promise: Promise) {
-    repository.metadataService.getQueue()?.cancelAll()
-    promise.resolve(true)
+    promise.resolve(repository.metadataService.cancelAllJobs())
   }
 
   @ReactMethod
   fun getRecent(mediaType: String?, limit: Int?, promise: Promise) {
     coroutineMethod({
       val actualLimit = limit ?: 50
-      val sortOrder = "${MediaStore.MediaColumns.DATE_ADDED} DESC LIMIT $actualLimit"
+      val sortOrder = "${MediaStore.MediaColumns.DATE_ADDED} DESC"
       val results = mutableListOf<Map<String, Any?>>()
       val types = if (mediaType != null) listOf(mediaType) else listOf("audio", "video", "image", "document")
       for (type in types) {
         val cursor = when (type) { "audio" -> repository.queryAudio(queryBuilder.buildAudioProjection(), null, null, sortOrder); "video" -> repository.queryVideo(queryBuilder.buildVideoProjection(), null, null, sortOrder); "image" -> repository.queryImages(queryBuilder.buildImageProjection(), null, null, sortOrder); "document" -> repository.queryDocuments(queryBuilder.buildDocumentProjection(), null, null, sortOrder); else -> null }
         if (cursor != null) { when (type) { "audio" -> cursor.use { results.addAll(mapper.mapGenericToAudio(it).map { r -> r.toMap() }) }; "video" -> cursor.use { results.addAll(mapper.mapGenericToVideo(it).map { r -> r.toMap() }) }; "image" -> cursor.use { results.addAll(mapper.mapGenericToImage(it).map { r -> r.toMap() }) }; "document" -> cursor.use { results.addAll(mapper.mapGenericToDocument(it).map { r -> r.toMap() }) } } }
       }
-      results
+      // Limit across all media types, not once per type.
+      results.sortedByDescending { (it["dateAdded"] as? Number)?.toLong() ?: 0L }.take(actualLimit)
     }, promise)
   }
 
@@ -388,7 +438,9 @@ class MediaStoreModule(reactContext: ReactApplicationContext) : ReactContextBase
   fun getFavorites(mediaType: String?, sort: ReadableMap?, pagination: ReadableMap?, promise: Promise) {
     coroutineMethod({
       val s = parseSort(sort); val p = parsePagination(pagination)
-      val favoriteSelection = "${MediaStore.MediaColumns.IS_FAVORITE} = 1"
+      val favoriteSelection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+        "${MediaStore.MediaColumns.IS_FAVORITE} = 1"
+      } else "0"
       val sortOrder = queryBuilder.applyPagination(queryBuilder.buildSortOrder(s), p)
       val results = mutableListOf<Map<String, Any?>>()
       val types = if (mediaType != null) listOf(mediaType) else listOf("audio", "video", "image", "document")
@@ -404,14 +456,15 @@ class MediaStoreModule(reactContext: ReactApplicationContext) : ReactContextBase
   fun getLargestFiles(mediaType: String?, limit: Int?, promise: Promise) {
     coroutineMethod({
       val actualLimit = limit ?: 50
-      val sortOrder = "${MediaStore.MediaColumns.SIZE} DESC LIMIT $actualLimit"
+      val sortOrder = "${MediaStore.MediaColumns.SIZE} DESC"
       val results = mutableListOf<Map<String, Any?>>()
       val types = if (mediaType != null) listOf(mediaType) else listOf("audio", "video", "image", "document")
       for (type in types) {
         val cursor = when (type) { "audio" -> repository.queryAudio(queryBuilder.buildAudioProjection(), null, null, sortOrder); "video" -> repository.queryVideo(queryBuilder.buildVideoProjection(), null, null, sortOrder); "image" -> repository.queryImages(queryBuilder.buildImageProjection(), null, null, sortOrder); "document" -> repository.queryDocuments(queryBuilder.buildDocumentProjection(), null, null, sortOrder); else -> null }
         if (cursor != null) { when (type) { "audio" -> cursor.use { results.addAll(mapper.mapGenericToAudio(it).map { r -> r.toMap() }) }; "video" -> cursor.use { results.addAll(mapper.mapGenericToVideo(it).map { r -> r.toMap() }) }; "image" -> cursor.use { results.addAll(mapper.mapGenericToImage(it).map { r -> r.toMap() }) }; "document" -> cursor.use { results.addAll(mapper.mapGenericToDocument(it).map { r -> r.toMap() }) } } }
       }
-      results
+      // Limit across all media types, not once per type.
+      results.sortedByDescending { (it["size"] as? Number)?.toLong() ?: 0L }.take(actualLimit)
     }, promise)
   }
 
@@ -445,7 +498,7 @@ class MediaStoreModule(reactContext: ReactApplicationContext) : ReactContextBase
   @ReactMethod
   fun requestPermissions(promise: Promise) {
     moduleScope.launch(Dispatchers.Main) {
-      try { val result = withContext(Dispatchers.IO) { permissions.request() }; promise.resolve(Arguments.makeNativeMap(result)) }
+      try { val result = permissions.request(); promise.resolve(Arguments.makeNativeMap(result)) }
       catch (e: Exception) { promise.reject("PERMISSION_DENIED", e.message, e) }
     }
   }
@@ -721,8 +774,8 @@ class MediaStoreModule(reactContext: ReactApplicationContext) : ReactContextBase
   fun readDirectory(dirPath: String, promise: Promise) {
     coroutineMethod({
       val dir = File(dirPath)
-      if (!dir.exists() || !dir.isDirectory) return@coroutineMethod emptyList<String>()
-      dir.listFiles()?.map { it.absolutePath } ?: emptyList<String>()
+      if (!dir.exists() || !dir.isDirectory) return@coroutineMethod emptyList<Map<String, Any?>>()
+      (dir.listFiles()?.toList() ?: emptyList()).map { it.toDirectoryEntry() }
     }, promise)
   }
 
@@ -730,20 +783,25 @@ class MediaStoreModule(reactContext: ReactApplicationContext) : ReactContextBase
   fun readDirectoryRecursive(dirPath: String, promise: Promise) {
     coroutineMethod({
       val dir = File(dirPath)
-      if (!dir.exists() || !dir.isDirectory) return@coroutineMethod emptyList<String>()
-      val result = mutableListOf<String>()
+      if (!dir.exists() || !dir.isDirectory) return@coroutineMethod emptyList<Map<String, Any?>>()
+      val result = mutableListOf<Map<String, Any?>>()
       recursiveListFiles(dir, result)
       result
     }, promise)
   }
 
-  private suspend fun recursiveListFiles(dir: File, result: MutableList<String>) {
+  private fun File.toDirectoryEntry(): Map<String, Any?> = mapOf(
+    "name" to name,
+    "path" to absolutePath,
+    "isDirectory" to isDirectory
+  )
+
+  private suspend fun recursiveListFiles(dir: File, result: MutableList<Map<String, Any?>>) {
     val files = dir.listFiles() ?: return
     for (file in files) {
+      result.add(file.toDirectoryEntry())
       if (file.isDirectory) {
         recursiveListFiles(file, result)
-      } else {
-        result.add(file.absolutePath)
       }
     }
   }
@@ -843,9 +901,9 @@ class MediaStoreModule(reactContext: ReactApplicationContext) : ReactContextBase
 
   private suspend fun recursiveStats(dir: File, stats: DirectoryStats) {
     val files = dir.listFiles() ?: return
-    stats.folderCount++
     for (file in files) {
       if (file.isDirectory) {
+        stats.folderCount++
         recursiveStats(file, stats)
       } else {
         stats.fileCount++
@@ -858,6 +916,33 @@ class MediaStoreModule(reactContext: ReactApplicationContext) : ReactContextBase
         else { stats.histogram["greaterThan1GB"] = (stats.histogram["greaterThan1GB"] ?: 0) + 1 }
       }
     }
+  }
+
+  @ReactMethod
+  fun readFileContents(filePath: String, promise: Promise) {
+    coroutineMethod({
+      try { File(filePath).readText() } catch (_: Exception) { null }
+    }, promise)
+  }
+
+  @ReactMethod
+  fun writeFileContents(filePath: String, data: Dynamic, promise: Promise) {
+    coroutineMethod({
+      try {
+        val bytes = when (data.type) {
+          ReadableType.String -> data.asString().toByteArray(Charsets.UTF_8)
+          ReadableType.Array -> {
+            val array = data.asArray()
+            ByteArray(array.size()) { array.getInt(it).toByte() }
+          }
+          else -> ByteArray(0)
+        }
+        val file = File(filePath)
+        file.parentFile?.mkdirs()
+        file.writeBytes(bytes)
+        true
+      } catch (_: Exception) { false }
+    }, promise)
   }
 
   // --- Mime Type Detection ---

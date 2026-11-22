@@ -88,16 +88,21 @@ class MediaStoreMapper {
     }
   }
 
-  fun mapImages(cursor: Cursor): List<ImageRecord> {
+  fun mapImages(cursor: Cursor, includeCameraDetails: Boolean = false): List<ImageRecord> {
     val items = mutableListOf<ImageRecord>()
-    while (cursor.moveToNext()) items.add(mapImageRow(cursor))
+    while (cursor.moveToNext()) items.add(mapImageRow(cursor, includeCameraDetails))
     return items
   }
 
-  fun mapImageRow(cursor: Cursor): ImageRecord {
+  /**
+   * Bulk queries keep [includeCameraDetails] false: opening ExifInterface for
+   * every row is prohibitively slow on large libraries. Single-item lookups
+   * opt in; full EXIF is always available via getMetadata()/getDetailedMetadata().
+   */
+  fun mapImageRow(cursor: Cursor, includeCameraDetails: Boolean = false): ImageRecord {
     val data = CursorUtils.getString(cursor, MediaStore.Images.Media.DATA)
     var cameraMake: String? = null; var cameraModel: String? = null
-    if (data.isNotEmpty()) {
+    if (includeCameraDetails && data.isNotEmpty()) {
       try { val file = File(data); if (file.exists()) { val exif = ExifInterface(data); cameraMake = exif.getAttribute(ExifInterface.TAG_MAKE); cameraModel = exif.getAttribute(ExifInterface.TAG_MODEL) } } catch (_: Exception) {}
     }
     return ImageRecord().apply {
@@ -108,7 +113,8 @@ class MediaStoreMapper {
       height = CursorUtils.getInt(cursor, MediaStore.Images.Media.HEIGHT)
       orientation = CursorUtils.getInt(cursor, MediaStore.Images.Media.ORIENTATION)
       this.cameraMake = cameraMake; this.cameraModel = cameraModel
-      dateTaken = CursorUtils.getLong(cursor, MediaStore.Images.Media.DATE_TAKEN)
+      // MediaStore stores DATE_TAKEN in seconds; the JS API uses milliseconds.
+      dateTaken = CursorUtils.getLong(cursor, MediaStore.Images.Media.DATE_TAKEN) * 1000L
       gpsLatitude = CursorUtils.getDoubleOrNull(cursor, MediaStore.Images.Media.LATITUDE)
       gpsLongitude = CursorUtils.getDoubleOrNull(cursor, MediaStore.Images.Media.LONGITUDE)
       mimeType = CursorUtils.getString(cursor, MediaStore.Images.Media.MIME_TYPE)
@@ -202,6 +208,7 @@ class MediaStoreMapper {
     val folderMap = mutableMapOf<String, FolderRecord>()
     while (cursor.moveToNext()) {
       val path = CursorUtils.getString(cursor, FileColumns.RELATIVE_PATH)
+        .ifEmpty { CursorUtils.getString(cursor, FileColumns.PARENT) }
       if (path.isNotEmpty()) {
         val folder = folderMap.getOrPut(path) {
           FolderRecord().apply {
@@ -221,6 +228,7 @@ class MediaStoreMapper {
     val folderMap = mutableMapOf<String, FolderStatisticsRecord>()
     while (cursor.moveToNext()) {
       val path = CursorUtils.getString(cursor, FileColumns.RELATIVE_PATH)
+        .ifEmpty { CursorUtils.getString(cursor, FileColumns.PARENT) }
       val size = CursorUtils.getLong(cursor, FileColumns.SIZE)
       val mimeType = CursorUtils.getString(cursor, FileColumns.MIME_TYPE)
       if (path.isNotEmpty()) {
@@ -248,7 +256,7 @@ class MediaStoreMapper {
 
   fun mapSingle(cursor: Cursor, mediaType: String): Any? {
     if (!cursor.moveToFirst()) return null
-    return when (mediaType) { "audio" -> mapAudioRow(cursor); "video" -> mapVideoRow(cursor); "image" -> mapImageRow(cursor); "document" -> mapDocumentRow(cursor); else -> null }
+    return when (mediaType) { "audio" -> mapAudioRow(cursor); "video" -> mapVideoRow(cursor); "image" -> mapImageRow(cursor, includeCameraDetails = true); "document" -> mapDocumentRow(cursor); else -> null }
   }
 
   fun mapGenericToAudio(cursor: Cursor): List<AudioRecord> { val items = mutableListOf<AudioRecord>(); while (cursor.moveToNext()) items.add(mapAudioRow(cursor)); return items }
